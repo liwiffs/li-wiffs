@@ -269,6 +269,23 @@
     </div>
     <button class="btn btn-primary" onclick="startGame()">▶ Start Game</button>
   </div>
+
+  <div class="card">
+    <h2>Sync Between Devices</h2>
+    <p style="color:var(--muted);font-size:.85rem;margin-bottom:14px">
+      Each browser stores data separately. Export from one device, then import on another to keep everything in sync.
+    </p>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-primary" onclick="exportData()" style="flex:1;min-width:140px">
+        ⬇ Export Data
+      </button>
+      <label class="btn btn-ghost" style="flex:1;min-width:140px;text-align:center;cursor:pointer;padding:9px 20px">
+        ⬆ Import Data
+        <input type="file" accept=".json" onchange="importData(event)" style="display:none" />
+      </label>
+    </div>
+    <div id="importStatus" style="margin-top:10px;font-size:.82rem;display:none"></div>
+  </div>
 </div>
 
 <!-- ===== LIVE GAME ===== -->
@@ -1226,6 +1243,60 @@ function openModal(title, body, onConfirm, hideConfirm=false) {
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.getElementById('modalConfirm').style.display = '';
+}
+
+// ─── EXPORT / IMPORT ─────────────────────────────────────────────────────────
+function exportData() {
+  const filename = `liwiffs-backup-${new Date().toISOString().slice(0,10)}.json`;
+  const json = JSON.stringify(state, null, 2);
+  const blob = new Blob([json], { type: 'application/json' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+function importData(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const status = document.getElementById('importStatus');
+  const reader = new FileReader();
+  reader.onload = e => {
+    try {
+      const imported = JSON.parse(e.target.result);
+      // Basic validation
+      if (!imported.teams || !Array.isArray(imported.teams)) throw new Error('Invalid file format.');
+      openModal('Import Data?',
+        `<p style="color:var(--muted);font-size:.9rem">
+           This will <strong style="color:var(--text)">replace all current data</strong> on this device
+           with the imported file.<br><br>
+           Found: <strong style="color:var(--text)">${imported.games?.length||0} game(s)</strong>,
+           <strong style="color:var(--text)">${Object.keys(imported.playerStats||{}).length} player(s)</strong>.
+         </p>`,
+        () => {
+          state = { ...state, ...imported };
+          save();
+          // Refresh all UI
+          document.getElementById('team1name').value = state.teams[0].name;
+          document.getElementById('team2name').value = state.teams[1].name;
+          renderSetupPlayers();
+          renderStats();
+          renderHistory();
+          populateTeamFilter();
+          status.style.display = 'block';
+          status.style.color = 'var(--green)';
+          status.textContent = `✅ Imported successfully — ${imported.games?.length||0} game(s) and ${Object.keys(imported.playerStats||{}).length} player(s) loaded.`;
+        }
+      );
+    } catch(err) {
+      status.style.display = 'block';
+      status.style.color = 'var(--accent)';
+      status.textContent = `❌ Import failed: ${err.message}`;
+    }
+    // Reset file input so the same file can be re-imported if needed
+    event.target.value = '';
+  };
+  reader.readAsText(file);
 }
 </script>
 </body>
