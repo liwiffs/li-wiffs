@@ -4,6 +4,8 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>L.I. Wiffs</title>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-database-compat.js"></script>
 <style>
   :root {
     --primary: #f97316;
@@ -215,7 +217,13 @@
 
 <header>
   <h1>⚾ L.I. Wiffs</h1>
-  <span id="headerDate"></span>
+  <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+    <div id="syncStatus" style="display:flex;align-items:center;gap:6px;font-size:.78rem;color:var(--muted)">
+      <div id="syncDot" style="width:8px;height:8px;border-radius:50%;background:#446;flex-shrink:0"></div>
+      <span id="syncLabel">Not connected</span>
+    </div>
+    <span id="headerDate"></span>
+  </div>
 </header>
 
 <nav>
@@ -727,20 +735,57 @@ function renderLog() {
 }
 
 // ─── RECORD STAT ─────────────────────────────────────────────────────────────
-// If key==='rbi' and rbiCount is undefined, show the RBI count picker first.
-function recordStat(key, rbiCount) {
-  const g = state.game; if (!g || g.gameOver) return;
+// Keys that show an RBI picker (0–3) before committing stats
+const RBI_PICKER_KEYS = new Set(['single','double','triple','bb','go','fo','hbp']);
 
-  // RBI: show count picker before committing
-  if (key === 'rbi' && rbiCount === undefined) {
-    const batter = currentBatter();
+function recordStat(key, extraCount) {
+  const g = state.game; if (!g || g.gameOver) return;
+  const batter = currentBatter();
+
+  // ── HR: pick how many runs scored (1–4) ──────────────────────────────────
+  if (key === 'hr' && extraCount === undefined) {
+    openModal('Home Run! 💣 How many runs scored?',
+      `<p style="color:var(--muted);font-size:.85rem;margin-bottom:12px">
+         Include the batter. Solo HR = 1, bases loaded = 4.
+       </p>
+       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+         ${[1,2,3,4].map(n =>
+           `<button class="btn btn-primary" style="font-size:1.3rem;padding:14px 0"
+              onclick="closeModal();recordStat('hr',${n})">${n}</button>`
+         ).join('')}
+       </div>`,
+      null, true);
+    return;
+  }
+
+  // ── RBI picker for hits, walks, outs (0–3) ───────────────────────────────
+  if (RBI_PICKER_KEYS.has(key) && extraCount === undefined) {
+    const labels = { single:'singles', double:'doubles', triple:'triples',
+                     bb:'walks', go:'grounds out', fo:'flies out', hbp:'hit by pitch' };
+    openModal(`RBIs on this play?`,
+      `<p style="color:var(--muted);font-size:.85rem;margin-bottom:12px">
+         <strong style="color:var(--text)">${batter}</strong> ${labels[key]}.
+         How many runs scored on the play?
+       </p>
+       <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
+         ${[0,1,2,3].map(n =>
+           `<button class="btn ${n===0?'btn-ghost':'btn-primary'}" style="font-size:1.3rem;padding:14px 0"
+              onclick="closeModal();recordStat('${key}',${n})">${n}</button>`
+         ).join('')}
+       </div>`,
+      null, true);
+    return;
+  }
+
+  // ── Standalone RBI annotation button (1–4) ───────────────────────────────
+  if (key === 'rbi' && extraCount === undefined) {
     openModal('How many RBIs?',
       `<p style="color:var(--muted);font-size:.85rem;margin-bottom:12px">
          Each RBI automatically scores a run for <strong style="color:var(--text)">${batter}</strong>.
        </p>
        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px">
          ${[1,2,3,4].map(n =>
-           `<button class="btn btn-primary" style="font-size:1.2rem;padding:12px 0"
+           `<button class="btn btn-primary" style="font-size:1.3rem;padding:14px 0"
               onclick="closeModal();recordStat('rbi',${n})">${n}</button>`
          ).join('')}
        </div>`,
@@ -748,76 +793,92 @@ function recordStat(key, rbiCount) {
     return;
   }
 
-  const batter   = currentBatter();
+  // ── Commit the stat ───────────────────────────────────────────────────────
   const pitcher  = document.getElementById('selectPitcher').value;
   const battingT = g.halfInning;
   const bp = state.playerStats[batter];
   const pp = state.playerStats[pitcher];
 
   let msg='', out=false, isHit=false, advBatter=true;
-  // Delta objects — used by undoEvent to precisely reverse changes
   const bDelta={}, pDelta={};
   let runsAdded=0, hitsAdded=0, outsAdded=0, clearBases=false;
 
   function applyB(obj) { Object.entries(obj).forEach(([k,v])=>{ bp[k]=(bp[k]||0)+v; bDelta[k]=(bDelta[k]||0)+v; }); }
   function applyP(obj) { Object.entries(obj).forEach(([k,v])=>{ pp[k]=(pp[k]||0)+v; pDelta[k]=(pDelta[k]||0)+v; }); }
 
+  const rbi = extraCount || 0;
+
   switch(key) {
     case 'single':
-      applyB({AB:1,H:1}); applyP({HA:1}); isHit=true;
-      msg=`${batter} singles`; break;
+      applyB({AB:1, H:1, RBI:rbi}); applyP({HA:1, R:rbi, ER:rbi}); isHit=true;
+      runsAdded=rbi; g.currentRunsThisHalf+=rbi;
+      msg=`${batter} singles${rbi?` — ${rbi} RBI`:''}`;
+      break;
     case 'double':
-      applyB({AB:1,H:1}); applyP({HA:1}); isHit=true;
-      msg=`${batter} doubles`; break;
+      applyB({AB:1, H:1, RBI:rbi}); applyP({HA:1, R:rbi, ER:rbi}); isHit=true;
+      runsAdded=rbi; g.currentRunsThisHalf+=rbi;
+      msg=`${batter} doubles${rbi?` — ${rbi} RBI`:''}`;
+      break;
     case 'triple':
-      applyB({AB:1,H:1}); applyP({HA:1}); isHit=true;
-      msg=`${batter} triples`; break;
-    case 'hr':
-      applyB({AB:1,H:1,HR:1,RBI:1}); applyP({HA:1,R:1,ER:1}); isHit=true;
-      runsAdded=1; clearBases=true;
-      g.currentRunsThisHalf++; g.bases=[false,false,false];
-      msg=`${batter} HOME RUN! 💣`; break;
+      applyB({AB:1, H:1, RBI:rbi}); applyP({HA:1, R:rbi, ER:rbi}); isHit=true;
+      runsAdded=rbi; g.currentRunsThisHalf+=rbi;
+      msg=`${batter} triples${rbi?` — ${rbi} RBI`:''}`;
+      break;
+    case 'hr': {
+      const runs = extraCount || 1;
+      applyB({AB:1, H:1, HR:1, RBI:runs}); applyP({HA:1, R:runs, ER:runs}); isHit=true;
+      runsAdded=runs; clearBases=true;
+      g.currentRunsThisHalf+=runs; g.bases=[false,false,false];
+      msg=`${batter} HOME RUN! 💣 — ${runs} run${runs>1?'s':''}`;
+      break;
+    }
     case 'bb':
-      applyB({BB:1}); applyP({BBp:1});
-      msg=`${batter} walks (BB)`; break;
+      applyB({BB:1, RBI:rbi}); applyP({BBp:1, R:rbi, ER:rbi});
+      runsAdded=rbi; g.currentRunsThisHalf+=rbi;
+      msg=`${batter} walks (BB)${rbi?` — ${rbi} RBI`:''}`;
+      break;
     case 'k':
-      applyB({AB:1,K:1}); applyP({Kp:1}); out=true; outsAdded=1;
-      msg=`${batter} strikes out`; break;
+      applyB({AB:1, K:1}); applyP({Kp:1}); out=true; outsAdded=1;
+      msg=`${batter} strikes out`;
+      break;
     case 'go':
-      applyB({AB:1}); out=true; outsAdded=1;
-      msg=`${batter} grounds out`; break;
+      applyB({AB:1, RBI:rbi}); applyP({R:rbi, ER:rbi}); out=true; outsAdded=1;
+      runsAdded=rbi; g.currentRunsThisHalf+=rbi;
+      msg=`${batter} grounds out${rbi?` — ${rbi} RBI`:''}`;
+      break;
     case 'fo':
-      applyB({AB:1}); out=true; outsAdded=1;
-      msg=`${batter} flies out`; break;
+      applyB({AB:1, RBI:rbi}); applyP({R:rbi, ER:rbi}); out=true; outsAdded=1;
+      runsAdded=rbi; g.currentRunsThisHalf+=rbi;
+      msg=`${batter} flies out${rbi?` — ${rbi} RBI`:''}`;
+      break;
     case 'run':
-      applyP({R:1,ER:1}); runsAdded=1;
+      applyP({R:1, ER:1}); runsAdded=1;
       g.currentRunsThisHalf++;
-      msg=`Run scored (${state.teams[battingT].name})`; advBatter=false; break;
+      msg=`Run scored (${state.teams[battingT].name})`; advBatter=false;
+      break;
     case 'rbi': {
-      const n = rbiCount || 1;
-      applyB({RBI:n}); applyP({R:n,ER:n}); runsAdded=n;
-      g.currentRunsThisHalf += n;
-      msg=`${batter} — ${n} RBI (${n} run${n>1?'s':''} scored)`; advBatter=false; break;
+      const n = extraCount || 1;
+      applyB({RBI:n}); applyP({R:n, ER:n}); runsAdded=n;
+      g.currentRunsThisHalf+=n;
+      msg=`${batter} — ${n} RBI (${n} run${n>1?'s':''} scored)`; advBatter=false;
+      break;
     }
     case 'error':
-      msg=`Error — ${batter} reaches`; break;
+      msg=`Error — ${batter} reaches`;
+      break;
     case 'hbp':
-      applyB({BB:1}); applyP({BBp:1});
-      msg=`${batter} hit by pitch`; break;
+      applyB({BB:1, RBI:rbi}); applyP({BBp:1, R:rbi, ER:rbi});
+      runsAdded=rbi; g.currentRunsThisHalf+=rbi;
+      msg=`${batter} hit by pitch${rbi?` — ${rbi} RBI`:''}`;
+      break;
   }
 
   if (isHit) { g.currentHitsThisHalf++; hitsAdded=1; }
 
-  const label = `Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`;
   g.log.push({
-    t: label, msg,
-    changes: {
-      batter, pitcher, battingTeam: battingT,
-      bDelta, pDelta,
-      runsAdded, hitsAdded, outsAdded,
-      clearBases,
-      batterAdvanced: advBatter
-    }
+    t: `Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`, msg,
+    changes: { batter, pitcher, battingTeam:battingT, bDelta, pDelta,
+               runsAdded, hitsAdded, outsAdded, clearBases, batterAdvanced:advBatter }
   });
 
   if (advBatter) advanceBatter();
