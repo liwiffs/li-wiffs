@@ -595,6 +595,7 @@ function startFirebaseListener() {
       state = { ...state, ...remoteState };
       try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e){}
       refreshCurrentPage();
+      updateAdminChip();
       setSyncStatus('live');
       return;
     }
@@ -606,6 +607,7 @@ function startFirebaseListener() {
     state = { ...state, ...remoteState };
     try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e){}
     refreshCurrentPage();
+    updateAdminChip();
     setSyncStatus('synced');
     setTimeout(() => setSyncStatus('live'), 2500);
   },
@@ -632,6 +634,7 @@ function showPage(id) {
     b.classList.toggle('active', ['setup','game','stats','teams','history'][i] === id);
   });
   document.getElementById('page-'+id).classList.add('active');
+  if (id==='setup')   { renderSetupPlayers(); renderAdminCard(); }
   if (id==='stats')   renderStats();
   if (id==='teams')   { populateTeamFilter(); renderTeamStats(); }
   if (id==='history') renderHistory();
