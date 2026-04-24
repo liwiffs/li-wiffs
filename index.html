@@ -853,18 +853,19 @@ function recordStat(key, extra) {
     return;
   }
 
-  // ── Two-Run Rule (1 out, 2 runs, no AB) ───────────────────────────────────
+  // ── Two-Run Rule (1 out, 2 runs, batter gets AB and is out) ─────────────
   if (key === 'two_run') {
     const pitcher=document.getElementById('selectPitcher').value;
     const bT=g.halfInning;
-    const pp=state.playerStats[pitcher];
+    const bp=state.playerStats[batter], pp=state.playerStats[pitcher];
+    if(bp){ bp.AB=(bp.AB||0)+1; bp.RBI=(bp.RBI||0)+2; }
     if(pp){ pp.R=(pp.R||0)+2; pp.ER=(pp.ER||0)+2; }
-    const pD={R:2,ER:2};
+    const bD={AB:1,RBI:2}, pD={R:2,ER:2};
     const label=`Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`;
-    const msg=`Two-Run Rule — 1 out traded for 2 runs`;
+    const msg=`${batter} — Two-Run Rule (1 out, 2 RBI, 2 runs)`;
     g.currentRunsThisHalf+=2; g.outs++;
-    g.log.push({t:label,msg,changes:{batter:null,pitcher,battingTeam:bT,bD:{},pD,runsAdded:2,hitsAdded:0,outsAdded:1,clearBases:false,batterAdvanced:false}});
-    save();
+    g.log.push({t:label,msg,changes:{batter,pitcher,battingTeam:bT,bD,pD,runsAdded:2,hitsAdded:0,outsAdded:1,clearBases:false,batterAdvanced:true}});
+    advanceBatter(); save();
     if(g.outs>=g.outsPerInning) endHalfInning(); else renderGame();
     return;
   }
@@ -1004,6 +1005,12 @@ function changeHalf(dir) {
 
 function endGame() {
   const g=state.game; g.gameOver=true;
+  // Flush any in-progress half-inning so current runs count in the final score
+  const bT=g.halfInning, inn=g.currentInning-1;
+  if (g.score[bT][inn]===null) {
+    g.score[bT][inn] = g.currentRunsThisHalf;
+    g.hits[bT][inn]  = g.currentHitsThisHalf;
+  }
   const s0=g.score[0].reduce((a,b)=>a+(b||0),0), s1=g.score[1].reduce((a,b)=>a+(b||0),0);
   const h0=g.hits[0].reduce((a,b)=>a+(b||0),0),  h1=g.hits[1].reduce((a,b)=>a+(b||0),0);
   const winner=s0>s1?state.teams[0].name:s1>s0?state.teams[1].name:'Tie';
@@ -1019,8 +1026,16 @@ function endGame() {
     if(state.playerStats[p]) state.playerStats[p].G=(state.playerStats[p].G||0)+1;
   });
   state.game=null; save();
-  alert(`Game over!\n${state.teams[0].name} ${s0} – ${state.teams[1].name} ${s1}\n${winner!=='Tie'?winner+' wins!':"It's a tie!"}`);
-  showPage('history');
+  const resultMsg = winner==='Tie'
+    ? `It's a tie — ${state.teams[0].name} ${s0}, ${state.teams[1].name} ${s1}`
+    : `${winner} wins! ${state.teams[0].name} ${s0} – ${state.teams[1].name} ${s1}`;
+  openModal('⚾ Game Recorded',
+    `<div style="text-align:center;padding:10px 0">
+       <div style="font-size:1.4rem;margin-bottom:8px">${winner==='Tie'?'🤝':'🏆'}</div>
+       <div style="font-size:1rem;font-weight:700;color:var(--text);margin-bottom:6px">${resultMsg}</div>
+       <div style="font-size:.82rem;color:var(--muted)">Game saved to History.</div>
+     </div>`,
+    () => showPage('history'), false);
 }
 
 // ── UNDO ─────────────────────────────────────────────────────────────────────
