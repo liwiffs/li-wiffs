@@ -1205,8 +1205,23 @@ function confirmClearHistory() {
 function confirmResetStats() {
   if(!Object.keys(state.playerStats).length) return;
   requireAdmin(()=>{
-    openModal('Reset All Player Stats?',`<p style="color:var(--muted);font-size:.9rem">Zero out all player stats? Rosters kept. Cannot be undone.</p>`,
-      ()=>{ Object.keys(state.playerStats).forEach(p=>{ state.playerStats[p]={...state.playerStats[p],G:0,AB:0,H:0,HR:0,RBI:0,BB:0,K:0,IP:0,HA:0,R:0,ER:0,BBp:0,Kp:0}; }); save(); renderStats(); });
+    openModal('Reset All Stats &amp; Players?',
+      `<p style="color:var(--muted);font-size:.9rem;margin-bottom:10px">
+         This will <strong style="color:var(--text)">delete all players and their stats</strong>
+         from both rosters and the stats table. Cannot be undone.
+       </p>`,
+      ()=>{
+        // Wipe stats table entirely
+        state.playerStats = {};
+        // Remove all players from both rosters
+        state.teams[0].players = [];
+        state.teams[1].players = [];
+        save();
+        renderStats();
+        renderSetupPlayers();
+        populateTeamFilter();
+        renderTeamStats();
+      });
   });
 }
 
