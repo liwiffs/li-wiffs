@@ -476,7 +476,16 @@ let state = {
 let sortState = { batting:{ col:'AVG', asc:false }, pitching:{ col:'ERA', asc:true } };
 let sessionAdminLoggedIn = false;
 
+// Ensures all array fields are proper arrays (Firebase can turn empty arrays to null)
+function normalizeState() {
+  if (!Array.isArray(state.teams)) state.teams = [{ name:'Away', players:[] }, { name:'Home', players:[] }];
+  state.teams.forEach(t => { if (!Array.isArray(t.players)) t.players = []; });
+  if (!Array.isArray(state.games)) state.games = [];
+  if (!state.playerStats || typeof state.playerStats !== 'object') state.playerStats = {};
+}
+
 function save() {
+  normalizeState();
   try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e) {}
   if (fbRef) fbRef.set({ ...state, _dev: DEVICE_ID, _ts: Date.now() }).catch(() => setSyncUI('error'));
 }
@@ -485,6 +494,7 @@ function load() {
     const d = localStorage.getItem('liwiffs') || localStorage.getItem('wfbl');
     if (d) state = { ...state, ...JSON.parse(d) };
   } catch(e) {}
+  normalizeState();
 }
 
 function refreshCurrentPage() {
@@ -510,6 +520,7 @@ function startFirebaseListener() {
     if (firstLoad) {
       firstLoad = false;
       state = { ...state, ...remote };
+      normalizeState();
       try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e) {}
       refreshCurrentPage();
       renderAdminCard();
@@ -518,6 +529,7 @@ function startFirebaseListener() {
     }
     if (_dev === DEVICE_ID) return;
     state = { ...state, ...remote };
+    normalizeState();
     try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e) {}
     refreshCurrentPage();
     setSyncUI('synced');
@@ -569,6 +581,7 @@ function renderSetupPlayers() {
   });
 }
 function addPlayer(t) {
+  if (!Array.isArray(state.teams[t-1].players)) state.teams[t-1].players = [];
   state.teams[t-1].name = document.getElementById('team'+t+'name').value || state.teams[t-1].name;
   state.teams[t-1].players.push('Player '+(state.teams[t-1].players.length+1));
   save(); renderSetupPlayers();
