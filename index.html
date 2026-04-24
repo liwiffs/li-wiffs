@@ -470,6 +470,52 @@
 </div>
 
 <script>
+// ─── FIREBASE ────────────────────────────────────────────────────────────────
+const firebaseConfig = {
+  apiKey:            "AIzaSyD_lUYqfT3rCYtT2uM8TP8tpawShjf8H6Q",
+  authDomain:        "li-wiffs.firebaseapp.com",
+  databaseURL:       "https://li-wiffs-default-rtdb.firebaseio.com",
+  projectId:         "li-wiffs",
+  storageBucket:     "li-wiffs.firebasestorage.app",
+  messagingSenderId: "1017059143820",
+  appId:             "1:1017059143820:web:8401a8592d5b3ab5fe0ba9"
+};
+
+// Stable per-device ID so we can ignore our own Firebase echoes
+const DEVICE_ID = (() => {
+  let id = localStorage.getItem('liwiffs_device_id');
+  if (!id) { id = Math.random().toString(36).slice(2)+Date.now().toString(36); localStorage.setItem('liwiffs_device_id', id); }
+  return id;
+})();
+
+let fbRef = null;
+let fbInitialLoaded = false;
+
+try {
+  const fbApp = firebase.initializeApp(firebaseConfig);
+  fbRef = firebase.database(fbApp).ref('liwiffs/state');
+  setSyncStatus('connecting');
+} catch(e) {
+  console.warn('Firebase init failed:', e);
+  setSyncStatus('error');
+}
+
+function setSyncStatus(status) {
+  const dot   = document.getElementById('syncDot');
+  const label = document.getElementById('syncLabel');
+  if (!dot || !label) return;
+  const map = {
+    connecting: ['#f97316', 'Connecting…'],
+    live:       ['#2ecc71', '🟢 Live sync on'],
+    synced:     ['#2ecc71', '✓ Synced'],
+    error:      ['#e94560', 'Sync error'],
+    offline:    ['#556',    'Offline'],
+  };
+  const [color, text] = map[status] || map.offline;
+  dot.style.background = color;
+  label.textContent    = text;
+}
+
 // ─── STATE ───────────────────────────────────────────────────────────────────
 let state = {
   teams: [
@@ -485,7 +531,16 @@ let state = {
 // sort state for player stats tables
 let sortState = { batting:{ col:'AVG', asc:false }, pitching:{ col:'ERA', asc:true } };
 
-function save() { try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e){} }
+function save() {
+  // Always keep a local backup
+  try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e){}
+  // Push to Firebase — tag with device ID so listener can ignore the echo
+  if (fbRef) {
+    fbRef.set({ ...state, _device: DEVICE_ID, _ts: Date.now() })
+      .catch(e => { console.warn('Firebase write error:', e); setSyncStatus('error'); });
+  }
+}
+
 function load() {
   try {
     const d = localStorage.getItem('liwiffs') || localStorage.getItem('wfbl');
@@ -493,8 +548,59 @@ function load() {
   } catch(e) {}
 }
 
+// Refresh whichever page is currently visible after a remote update
+function refreshCurrentPage() {
+  const pages  = ['setup','game','stats','teams','history'];
+  const active = pages.find(p => document.getElementById('page-'+p)?.classList.contains('active'));
+  if (!active) return;
+  if (active === 'setup') {
+    document.getElementById('team1name').value = state.teams[0]?.name || '';
+    document.getElementById('team2name').value = state.teams[1]?.name || '';
+    renderSetupPlayers();
+  }
+  if (active === 'game')    { if (state.game) renderGame(); }
+  if (active === 'stats')   renderStats();
+  if (active === 'teams')   { populateTeamFilter(); renderTeamStats(); }
+  if (active === 'history') renderHistory();
+}
+
+// Start listening for real-time changes from other devices
+function startFirebaseListener() {
+  if (!fbRef) return;
+  fbRef.on('value', snapshot => {
+    if (!snapshot.exists()) {
+      // Database is empty — push our local state up
+      if (!fbInitialLoaded) { fbInitialLoaded = true; save(); setSyncStatus('live'); }
+      return;
+    }
+    const data = snapshot.val();
+    const { _device, _ts, ...remoteState } = data;
+
+    if (!fbInitialLoaded) {
+      // First load — Firebase is the source of truth, apply it
+      fbInitialLoaded = true;
+      state = { ...state, ...remoteState };
+      try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e){}
+      refreshCurrentPage();
+      setSyncStatus('live');
+      return;
+    }
+
+    // Ongoing listener — skip echoes from this device
+    if (_device === DEVICE_ID) return;
+
+    // Another device saved — update and refresh
+    state = { ...state, ...remoteState };
+    try { localStorage.setItem('liwiffs', JSON.stringify(state)); } catch(e){}
+    refreshCurrentPage();
+    setSyncStatus('synced');
+    setTimeout(() => setSyncStatus('live'), 2500);
+  },
+  err => { console.warn('Firebase listen error:', err); setSyncStatus('error'); });
+}
+
 // ─── INIT ────────────────────────────────────────────────────────────────────
-load();
+load(); // load localStorage immediately so UI isn't blank while Firebase connects
 document.getElementById('headerDate').textContent = new Date().toLocaleDateString('en-US',
   { weekday:'short', month:'short', day:'numeric', year:'numeric' });
 document.getElementById('team1name').value = state.teams[0].name;
@@ -503,6 +609,7 @@ renderSetupPlayers();
 renderStats();
 renderHistory();
 populateTeamFilter();
+startFirebaseListener(); // connect to Firebase and begin live sync
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
 function showPage(id) {
