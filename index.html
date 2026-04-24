@@ -203,14 +203,14 @@ tr:hover td { background: rgba(255,255,255,.03); }
     <h2>Teams &amp; Players</h2>
     <div class="row">
       <div>
-        <h3>Team 1</h3>
-        <input id="team1name" placeholder="Team name" value="Team 1" />
+        <h3>Away Team</h3>
+        <input id="team1name" placeholder="Away team name" value="Away" />
         <div id="team1players"></div>
         <button class="btn btn-ghost" style="margin-top:4px" onclick="addPlayer(1)">+ Add Player</button>
       </div>
       <div>
-        <h3>Team 2</h3>
-        <input id="team2name" placeholder="Team name" value="Team 2" />
+        <h3>Home Team</h3>
+        <input id="team2name" placeholder="Home team name" value="Home" />
         <div id="team2players"></div>
         <button class="btn btn-ghost" style="margin-top:4px" onclick="addPlayer(2)">+ Add Player</button>
       </div>
@@ -261,6 +261,17 @@ tr:hover td { background: rgba(255,255,255,.03); }
 
 <!-- LIVE GAME -->
 <div class="page" id="page-game">
+
+  <!-- Game-end banner (hidden until walk-off / inning logic triggers it) -->
+  <div id="gameEndBanner" style="display:none;background:linear-gradient(135deg,#1a4a1a,#0e2a0e);
+       border:2px solid var(--primary);border-radius:var(--radius);padding:16px 18px;
+       margin-bottom:14px;text-align:center">
+    <div id="gameEndMsg" style="font-size:1rem;font-weight:700;color:var(--primary);margin-bottom:10px"></div>
+    <button class="btn btn-primary" onclick="endGame()" style="font-size:.95rem;padding:10px 28px">
+      🏆 End Game &amp; Record Result
+    </button>
+  </div>
+
   <div class="card" style="padding:18px">
     <div id="scoreboard">
       <div class="empty">No game in progress. Go to Setup to start one.</div>
@@ -455,7 +466,7 @@ function setSyncUI(status) {
 
 // ── STATE ────────────────────────────────────────────────────────────────────
 let state = {
-  teams:       [{ name:'Team 1', players:[] }, { name:'Team 2', players:[] }],
+  teams:       [{ name:'Away', players:[] }, { name:'Home', players:[] }],
   settings:    { innings:7, outsPerInning:3 },
   game:        null,
   games:       [],
@@ -571,8 +582,8 @@ function confirmRemovePlayer(t,i) {
 
 // ── GAME INIT ────────────────────────────────────────────────────────────────
 function startGame() {
-  state.teams[0].name = document.getElementById('team1name').value || 'Team 1';
-  state.teams[1].name = document.getElementById('team2name').value || 'Team 2';
+  state.teams[0].name = document.getElementById('team1name').value || 'Away';
+  state.teams[1].name = document.getElementById('team2name').value || 'Home';
   if (!state.teams[0].players.length || !state.teams[1].players.length) {
     alert('Please add at least one player to each team first.'); return;
   }
@@ -587,6 +598,7 @@ function startGame() {
     currentRunsThisHalf:0, currentHitsThisHalf:0,
     bases:[false,false,false], batterIndex:[0,0],
     awaitingBatterAdvance:false, lastPlaySummary:'',
+    gameEndMessage:'',
     log:[], gameOver:false
   };
   ensurePlayerStats(); save();
@@ -605,8 +617,38 @@ function ensurePlayerStats() {
 // ── GAME RENDER ──────────────────────────────────────────────────────────────
 function renderGame() {
   const g = state.game; if (!g) return;
+  detectLiveWalkoff(g);
+  renderGameEndBanner(g);
   renderScoreboard(); renderGameStatus(); renderDiamond();
   renderAtBatIndicator(); renderPitcherSelect(); renderStatButtons(); renderLog();
+}
+
+// Detects walk-off mid-inning (home leading in bottom of last/extra)
+function detectLiveWalkoff(g) {
+  if (g.gameOver || g.halfInning !== 1 || g.currentInning < g.innings) {
+    // Clear walk-off message if we're not in that situation anymore
+    if (g.gameEndMessage && g.gameEndMessage.startsWith('🏃')) g.gameEndMessage = '';
+    return;
+  }
+  const away = g.score[0].reduce((a,b)=>a+(b||0),0);
+  const home = g.score[1].reduce((a,b)=>a+(b||0),0) + g.currentRunsThisHalf;
+  if (home > away) {
+    g.gameEndMessage = `🏃 Walk-off! ${state.teams[1].name} leads ${home}–${away} — game can end now!`;
+  } else if (g.gameEndMessage && g.gameEndMessage.startsWith('🏃')) {
+    g.gameEndMessage = ''; // lead was reversed, clear message
+  }
+}
+
+function renderGameEndBanner(g) {
+  const banner = document.getElementById('gameEndBanner');
+  const msg    = document.getElementById('gameEndMsg');
+  if (!banner || !msg) return;
+  if (g.gameEndMessage) {
+    msg.textContent      = g.gameEndMessage;
+    banner.style.display = 'block';
+  } else {
+    banner.style.display = 'none';
+  }
 }
 
 function renderScoreboard() {
@@ -894,14 +936,59 @@ function endHalfInning() {
   const pitcher=document.getElementById('selectPitcher').value;
   const pp=state.playerStats[pitcher];
   if(pp) pp.IP=(pp.IP||0)+(g.outsPerInning/3);
+
+  // Commit this half-inning's runs & hits to the scoreboard
   g.score[bT][g.currentInning-1]=g.currentRunsThisHalf;
   g.hits[bT][g.currentInning-1] =g.currentHitsThisHalf;
   g.currentRunsThisHalf=0; g.currentHitsThisHalf=0;
   g.outs=0; g.bases=[false,false,false];
   g.awaitingBatterAdvance=false; g.lastPlaySummary='';
-  if(g.halfInning===0) { g.halfInning=1; }
-  else { if(g.currentInning>=g.innings){ endGame(); return; } g.currentInning++; g.halfInning=0; }
+
+  const awayRuns = g.score[0].reduce((a,b)=>a+(b||0),0);
+  const homeRuns = g.score[1].reduce((a,b)=>a+(b||0),0);
+  const isLastOrExtra = g.currentInning >= g.innings;
+
+  if (g.halfInning === 0) {
+    // ── End of TOP half ──────────────────────────────────────────────────────
+    if (isLastOrExtra && homeRuns > awayRuns) {
+      // Home already leads after top of last — no bottom needed
+      g.gameEndMessage = `🏆 ${state.teams[1].name} leads ${homeRuns}–${awayRuns} after top ${g.currentInning}. No bottom half needed.`;
+      save(); renderGame(); return;
+    }
+    g.halfInning = 1; // play the bottom
+  } else {
+    // ── End of BOTTOM half ───────────────────────────────────────────────────
+    if (isLastOrExtra) {
+      if (homeRuns > awayRuns) {
+        // Home wins (walk-off already cleared by banner, now confirmed)
+        g.gameEndMessage = `🏆 ${state.teams[1].name} wins ${homeRuns}–${awayRuns}!`;
+        save(); renderGame(); return;
+      } else if (homeRuns === awayRuns) {
+        // Tied — go to extra innings
+        addExtraInning(g);
+        save(); renderGame(); return;
+      } else {
+        // Away wins
+        g.gameEndMessage = `🏆 ${state.teams[0].name} wins ${awayRuns}–${homeRuns}!`;
+        save(); renderGame(); return;
+      }
+    }
+    // Normal mid-game — move to next inning
+    g.currentInning++; g.halfInning=0;
+  }
+
   save(); renderGame();
+}
+
+function addExtraInning(g) {
+  g.innings++;
+  g.score[0].push(null); g.score[1].push(null);
+  g.hits[0].push(null);  g.hits[1].push(null);
+  g.currentInning = g.innings;
+  g.halfInning = 0; g.outs = 0;
+  g.bases=[false,false,false];
+  g.awaitingBatterAdvance=false; g.lastPlaySummary='';
+  g.gameEndMessage = `⚾ Tied ${g.score[0].reduce((a,b)=>a+(b||0),0)}–${g.score[1].reduce((a,b)=>a+(b||0),0)} — Extra Inning ${g.innings}!`;
 }
 
 function changeHalf(dir) {
@@ -911,7 +998,7 @@ function changeHalf(dir) {
   const max=g.innings*2-1;
   if(abs>max){ endGame(); return; }
   g.halfInning=abs%2; g.currentInning=Math.floor(abs/2)+1; g.outs=0;
-  g.awaitingBatterAdvance=false; g.lastPlaySummary='';
+  g.awaitingBatterAdvance=false; g.lastPlaySummary=''; g.gameEndMessage='';
   save(); renderGame();
 }
 
