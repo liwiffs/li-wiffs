@@ -640,8 +640,12 @@ function showPage(id) {
   if (id==='history') renderHistory();
   if (id==='game') {
     if (state.game) renderGame();
-    else document.getElementById('page-game').innerHTML =
-      '<div class="empty" style="padding:40px">No game in progress. Go to <strong>Setup</strong> to start one.</div>';
+    else {
+      // Show message in scoreboard area only — never destroy the full page HTML
+      const sb = document.getElementById('scoreboard');
+      if (sb) sb.innerHTML =
+        '<div class="empty" style="padding:30px 0">No game in progress. Go to <strong>Setup</strong> to start one.</div>';
+    }
   }
 }
 
