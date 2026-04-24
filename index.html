@@ -222,6 +222,12 @@
       <div id="syncDot" style="width:8px;height:8px;border-radius:50%;background:#446;flex-shrink:0"></div>
       <span id="syncLabel">Not connected</span>
     </div>
+    <div id="adminChip" onclick="showAdminModal()"
+         style="display:flex;align-items:center;gap:5px;font-size:.78rem;cursor:pointer;
+                background:var(--card);border-radius:20px;padding:4px 12px;border:1px solid #334">
+      <span id="adminChipIcon">🔒</span>
+      <span id="adminChipLabel" style="color:var(--muted)">Admin</span>
+    </div>
     <span id="headerDate"></span>
   </div>
 </header>
@@ -293,6 +299,11 @@
       </label>
     </div>
     <div id="importStatus" style="margin-top:10px;font-size:.82rem;display:none"></div>
+  </div>
+
+  <div class="card" id="adminCard">
+    <h2>🔐 Admin</h2>
+    <div id="adminCardBody"></div>
   </div>
 </div>
 
@@ -374,7 +385,7 @@
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <h2 style="margin:0">Batting Stats</h2>
-      <button class="btn btn-red" onclick="confirmResetStats()" style="font-size:.8rem;padding:6px 14px">🗑 Reset All</button>
+      <button class="btn btn-red" onclick="confirmResetStats()" style="font-size:.8rem;padding:6px 14px">🔒 Reset All</button>
     </div>
     <div style="overflow-x:auto">
       <table><thead><tr>
@@ -449,7 +460,7 @@
   <div class="card">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
       <h2 style="margin:0">Game History</h2>
-      <button class="btn btn-red" onclick="confirmClearHistory()" style="font-size:.8rem;padding:6px 14px">🗑 Clear All</button>
+      <button class="btn btn-red" onclick="confirmClearHistory()" style="font-size:.8rem;padding:6px 14px">🔒 Clear All</button>
     </div>
     <div id="historyList"></div>
   </div>
@@ -526,6 +537,7 @@ let state = {
   game: null,
   games: [],
   playerStats: {},
+  adminCreds: null,   // { user: hash, pass: hash } — set by admin setup
 };
 
 // sort state for player stats tables
@@ -557,6 +569,7 @@ function refreshCurrentPage() {
     document.getElementById('team1name').value = state.teams[0]?.name || '';
     document.getElementById('team2name').value = state.teams[1]?.name || '';
     renderSetupPlayers();
+    renderAdminCard();
   }
   if (active === 'game')    { if (state.game) renderGame(); }
   if (active === 'stats')   renderStats();
@@ -609,6 +622,7 @@ renderSetupPlayers();
 renderStats();
 renderHistory();
 populateTeamFilter();
+renderAdminCard();
 startFirebaseListener(); // connect to Firebase and begin live sync
 
 // ─── NAVIGATION ──────────────────────────────────────────────────────────────
@@ -1379,20 +1393,24 @@ function confirmDeleteGame(idx) {
 }
 function confirmClearHistory() {
   if (!state.games.length) return;
-  openModal('Clear All History?',
-    `<p style="color:var(--muted);font-size:.9rem">Delete all <strong style="color:var(--text)">${state.games.length}</strong> game record(s)? Cannot be undone.</p>`,
-    ()=>{ state.games=[]; save(); renderHistory(); });
+  requireAdmin(() => {
+    openModal('Clear All History?',
+      `<p style="color:var(--muted);font-size:.9rem">Delete all <strong style="color:var(--text)">${state.games.length}</strong> game record(s)? Cannot be undone.</p>`,
+      ()=>{ state.games=[]; save(); renderHistory(); });
+  });
 }
 function confirmResetStats() {
   const count=Object.keys(state.playerStats).length; if (!count) return;
-  openModal('Reset All Player Stats?',
-    `<p style="color:var(--muted);font-size:.9rem">Zero out stats for all <strong style="color:var(--text)">${count}</strong> player(s)? Rosters kept. Cannot be undone.</p>`,
-    ()=>{
-      Object.keys(state.playerStats).forEach(p=>{
-        state.playerStats[p]={...state.playerStats[p],G:0,AB:0,H:0,HR:0,RBI:0,BB:0,K:0,IP:0,HA:0,R:0,ER:0,BBp:0,Kp:0};
+  requireAdmin(() => {
+    openModal('Reset All Player Stats?',
+      `<p style="color:var(--muted);font-size:.9rem">Zero out stats for all <strong style="color:var(--text)">${count}</strong> player(s)? Rosters kept. Cannot be undone.</p>`,
+      ()=>{
+        Object.keys(state.playerStats).forEach(p=>{
+          state.playerStats[p]={...state.playerStats[p],G:0,AB:0,H:0,HR:0,RBI:0,BB:0,K:0,IP:0,HA:0,R:0,ER:0,BBp:0,Kp:0};
+        });
+        save(); renderStats();
       });
-      save(); renderStats();
-    });
+  });
 }
 
 // ─── MODAL ───────────────────────────────────────────────────────────────────
@@ -1411,6 +1429,195 @@ function openModal(title, body, onConfirm, hideConfirm=false) {
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
   document.getElementById('modalConfirm').style.display = '';
+}
+
+// ─── ADMIN ───────────────────────────────────────────────────────────────────
+let sessionAdminLoggedIn = false;
+
+// Simple non-reversible hash — good enough for a personal app
+function hashStr(str) {
+  let h = 5381;
+  for (let i = 0; i < str.length; i++) h = (h * 33) ^ str.charCodeAt(i);
+  return (h >>> 0).toString(36);
+}
+
+function updateAdminChip() {
+  const icon  = document.getElementById('adminChipIcon');
+  const label = document.getElementById('adminChipLabel');
+  if (!icon || !label) return;
+  if (!state.adminCreds) {
+    icon.textContent  = '⚙️';
+    label.textContent = 'Admin setup';
+    label.style.color = 'var(--muted)';
+  } else if (sessionAdminLoggedIn) {
+    icon.textContent  = '🔓';
+    label.textContent = 'Admin ✓';
+    label.style.color = 'var(--green)';
+  } else {
+    icon.textContent  = '🔒';
+    label.textContent = 'Admin';
+    label.style.color = 'var(--muted)';
+  }
+}
+
+function renderAdminCard() {
+  const body = document.getElementById('adminCardBody');
+  if (!body) return;
+
+  if (!state.adminCreds) {
+    // First-time setup
+    body.innerHTML = `
+      <p style="color:var(--muted);font-size:.85rem;margin-bottom:14px">
+        No admin account set up yet. Create one to protect Reset Stats and Clear History.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:8px;max-width:320px">
+        <input id="adminSetupUser" placeholder="Username" style="margin:0" />
+        <input id="adminSetupPass" type="password" placeholder="Password" style="margin:0" />
+        <input id="adminSetupPass2" type="password" placeholder="Confirm password" style="margin:0" />
+        <p id="adminSetupErr" style="color:var(--accent);font-size:.82rem;display:none"></p>
+        <button class="btn btn-primary" onclick="adminCreateAccount()">Create Admin Account</button>
+      </div>`;
+  } else if (sessionAdminLoggedIn) {
+    // Logged in
+    body.innerHTML = `
+      <p style="color:var(--green);font-size:.88rem;margin-bottom:14px">
+        ✓ Logged in as admin this session. Protected actions are unlocked.
+      </p>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button class="btn btn-ghost" onclick="adminLogout()" style="flex:0">🔒 Log Out</button>
+        <button class="btn btn-ghost" onclick="adminShowChangePassword()" style="flex:0">Change Password</button>
+        <button class="btn btn-ghost" onclick="adminShowRemoveAccount()" style="flex:0;color:var(--accent);border-color:var(--accent)">Remove Admin</button>
+      </div>`;
+  } else {
+    // Account exists, not logged in
+    body.innerHTML = `
+      <p style="color:var(--muted);font-size:.85rem;margin-bottom:14px">
+        Admin account is active. Log in to unlock protected actions.
+      </p>
+      <div style="display:flex;flex-direction:column;gap:8px;max-width:320px">
+        <input id="adminLoginUser" placeholder="Username" style="margin:0" />
+        <input id="adminLoginPass" type="password" placeholder="Password" style="margin:0" />
+        <p id="adminLoginErr" style="color:var(--accent);font-size:.82rem;display:none">Incorrect username or password.</p>
+        <button class="btn btn-primary" onclick="adminLogin()">Log In</button>
+      </div>`;
+  }
+  updateAdminChip();
+}
+
+// Called from the 🔒 Admin chip in the header — jumps to setup and scrolls to card
+function showAdminModal() {
+  showPage('setup');
+  setTimeout(() => {
+    document.getElementById('adminCard')?.scrollIntoView({ behavior:'smooth', block:'center' });
+  }, 100);
+}
+
+function adminCreateAccount() {
+  const user  = document.getElementById('adminSetupUser')?.value.trim();
+  const pass  = document.getElementById('adminSetupPass')?.value;
+  const pass2 = document.getElementById('adminSetupPass2')?.value;
+  const err   = document.getElementById('adminSetupErr');
+  if (!user || !pass) { err.style.display='block'; err.textContent='Username and password required.'; return; }
+  if (pass !== pass2) { err.style.display='block'; err.textContent='Passwords do not match.'; return; }
+  if (pass.length < 4) { err.style.display='block'; err.textContent='Password must be at least 4 characters.'; return; }
+  state.adminCreds = { user: hashStr(user.toLowerCase()), pass: hashStr(pass) };
+  sessionAdminLoggedIn = true;
+  save();
+  renderAdminCard();
+}
+
+function adminLogin() {
+  const user = document.getElementById('adminLoginUser')?.value.trim();
+  const pass = document.getElementById('adminLoginPass')?.value;
+  const err  = document.getElementById('adminLoginErr');
+  if (state.adminCreds &&
+      hashStr(user.toLowerCase()) === state.adminCreds.user &&
+      hashStr(pass) === state.adminCreds.pass) {
+    sessionAdminLoggedIn = true;
+    renderAdminCard();
+  } else {
+    err.style.display = 'block';
+    document.getElementById('adminLoginPass').value = '';
+  }
+}
+
+function adminLogout() {
+  sessionAdminLoggedIn = false;
+  renderAdminCard();
+}
+
+function adminShowChangePassword() {
+  openModal('Change Password',
+    `<div style="display:flex;flex-direction:column;gap:8px">
+       <input id="cpOld"  type="password" placeholder="Current password" style="margin:0" />
+       <input id="cpNew"  type="password" placeholder="New password" style="margin:0" />
+       <input id="cpNew2" type="password" placeholder="Confirm new password" style="margin:0" />
+       <p id="cpErr" style="color:var(--accent);font-size:.82rem;display:none"></p>
+     </div>`,
+    () => {
+      const old  = document.getElementById('cpOld')?.value;
+      const nw   = document.getElementById('cpNew')?.value;
+      const nw2  = document.getElementById('cpNew2')?.value;
+      const err  = document.getElementById('cpErr');
+      if (hashStr(old) !== state.adminCreds.pass) { err.style.display='block'; err.textContent='Current password incorrect.'; return; }
+      if (nw !== nw2)    { err.style.display='block'; err.textContent='New passwords do not match.'; return; }
+      if (nw.length < 4) { err.style.display='block'; err.textContent='Password must be at least 4 characters.'; return; }
+      state.adminCreds.pass = hashStr(nw);
+      save();
+      closeModal();
+    });
+}
+
+function adminShowRemoveAccount() {
+  openModal('Remove Admin Account?',
+    `<p style="color:var(--muted);font-size:.9rem;margin-bottom:10px">
+       This removes all admin restrictions. Anyone will be able to reset stats and clear history.
+     </p>
+     <input id="removeAdminPass" type="password" placeholder="Enter current password to confirm" style="margin:0" />
+     <p id="removeAdminErr" style="color:var(--accent);font-size:.82rem;margin-top:6px;display:none">Incorrect password.</p>`,
+    () => {
+      const pass = document.getElementById('removeAdminPass')?.value;
+      if (hashStr(pass) !== state.adminCreds.pass) {
+        document.getElementById('removeAdminErr').style.display = 'block'; return;
+      }
+      state.adminCreds = null;
+      sessionAdminLoggedIn = false;
+      save(); renderAdminCard();
+      closeModal();
+    });
+}
+
+// Gate any action behind admin login
+function requireAdmin(onSuccess) {
+  if (!state.adminCreds) { onSuccess(); return; }   // no admin set — open to all
+  if (sessionAdminLoggedIn) { onSuccess(); return; } // already logged in
+
+  // Show inline login modal
+  openModal('🔒 Admin Login Required',
+    `<p style="color:var(--muted);font-size:.85rem;margin-bottom:12px">
+       This action is restricted to the admin.
+     </p>
+     <div style="display:flex;flex-direction:column;gap:8px">
+       <input id="reqAdminUser" placeholder="Username" style="margin:0" />
+       <input id="reqAdminPass" type="password" placeholder="Password" style="margin:0" />
+       <p id="reqAdminErr" style="color:var(--accent);font-size:.82rem;display:none">Incorrect username or password.</p>
+     </div>`,
+    () => {
+      const user = document.getElementById('reqAdminUser')?.value.trim();
+      const pass = document.getElementById('reqAdminPass')?.value;
+      if (hashStr(user.toLowerCase()) === state.adminCreds.user &&
+          hashStr(pass) === state.adminCreds.pass) {
+        sessionAdminLoggedIn = true;
+        updateAdminChip();
+        renderAdminCard();
+        onSuccess();
+      } else {
+        document.getElementById('reqAdminErr').style.display = 'block';
+        document.getElementById('reqAdminPass').value = '';
+        // Re-open so they can retry
+        setTimeout(() => requireAdmin(onSuccess), 200);
+      }
+    });
 }
 
 // ─── EXPORT / IMPORT ─────────────────────────────────────────────────────────
