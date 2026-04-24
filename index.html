@@ -586,6 +586,7 @@ function startGame() {
     hits:  [[...Array(innings).fill(null)],[...Array(innings).fill(null)]],
     currentRunsThisHalf:0, currentHitsThisHalf:0,
     bases:[false,false,false], batterIndex:[0,0],
+    awaitingBatterAdvance:false, lastPlaySummary:'',
     log:[], gameOver:false
   };
   ensurePlayerStats(); save();
@@ -675,24 +676,79 @@ function advanceBatter() {
 }
 
 const STAT_BUTTONS = [
-  {icon:'🎯',label:'Single',   key:'single'},
-  {icon:'✌️',label:'Double',   key:'double'},
-  {icon:'🔱',label:'Triple',   key:'triple'},
-  {icon:'💣',label:'Home Run', key:'hr'},
-  {icon:'🚶',label:'Walk (BB)',key:'bb'},
-  {icon:'💨',label:'Strikeout',key:'k'},
-  {icon:'🔁',label:'Groundout',key:'go'},
-  {icon:'☁️',label:'Flyout',   key:'fo'},
-  {icon:'🏃',label:'Run Scored',key:'run'},
-  {icon:'🎖️',label:'RBI',      key:'rbi'},
-  {icon:'❌',label:'Error',    key:'error'},
-  {icon:'💢',label:'HBP',      key:'hbp'},
+  {icon:'🎯',label:'Single',       key:'single'},
+  {icon:'✌️',label:'Double',       key:'double'},
+  {icon:'🔱',label:'Triple',       key:'triple'},
+  {icon:'💣',label:'Home Run',     key:'hr'},
+  {icon:'🚶',label:'Walk (BB)',    key:'bb'},
+  {icon:'💨',label:'Strikeout',    key:'k'},
+  {icon:'🔁',label:'Groundout',    key:'go'},
+  {icon:'☁️',label:'Flyout',       key:'fo'},
+  {icon:'🔄',label:'Double Play',  key:'dp'},
+  {icon:'⚡',label:'Two-Run Rule', key:'two_run'},
+  {icon:'🏃',label:'Run Scored',   key:'run'},
+  {icon:'🎖️',label:'RBI',         key:'rbi'},
+  {icon:'❌',label:'Error',        key:'error'},
+  {icon:'💢',label:'HBP',          key:'hbp'},
 ];
 function renderStatButtons() {
+  const g = state.game;
+  if (g && g.awaitingBatterAdvance) { showPostPlayPanel(); return; }
   document.getElementById('statButtons').innerHTML = STAT_BUTTONS.map(s=>
     `<button class="stat-btn" onclick="recordStat('${s.key}')">
       <span class="icon">${s.icon}</span>${s.label}
     </button>`).join('');
+}
+
+function showPostPlayPanel() {
+  const g = state.game; if (!g) return;
+  document.getElementById('statButtons').innerHTML = `
+    <div style="background:var(--mid);border-radius:8px;padding:12px 14px;grid-column:1/-1;margin-bottom:4px">
+      <div style="font-size:.72rem;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">Play recorded</div>
+      <div style="font-size:.9rem;font-weight:600;color:var(--text)">${g.lastPlaySummary}</div>
+    </div>
+    <div style="font-size:.76rem;color:var(--muted);grid-column:1/-1;margin:2px 0 6px">Additional events before next batter:</div>
+    <button class="stat-btn" onclick="recordPostPlay('baserunner_out')">
+      <span class="icon">🏃</span>Baserunner Out
+    </button>
+    <button class="stat-btn" onclick="recordPostPlay('extra_run')">
+      <span class="icon">🏃</span>Run Scored
+    </button>
+    <button class="btn btn-primary" onclick="finalizeAtBat()"
+      style="grid-column:1/-1;padding:14px;font-size:1rem;margin-top:6px;border-radius:8px">
+      ✅ Next Batter →
+    </button>`;
+}
+
+function recordPostPlay(key) {
+  const g = state.game; if (!g) return;
+  const pitcher = document.getElementById('selectPitcher').value;
+  const pp = state.playerStats[pitcher];
+  const bT = g.halfInning;
+  const label = `Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`;
+
+  if (key === 'baserunner_out') {
+    g.outs++;
+    g.log.push({ t:label, msg:'Baserunner out on bases',
+      changes:{batter:null,pitcher,battingTeam:bT,bD:{},pD:{},runsAdded:0,hitsAdded:0,outsAdded:1,clearBases:false,batterAdvanced:false} });
+    save();
+    if (g.outs >= g.outsPerInning) { g.awaitingBatterAdvance=false; endHalfInning(); return; }
+    renderGame();
+  }
+
+  if (key === 'extra_run') {
+    g.currentRunsThisHalf++;
+    if (pp) { pp.R=(pp.R||0)+1; pp.ER=(pp.ER||0)+1; }
+    g.log.push({ t:label, msg:`Run scored (${state.teams[bT].name})`,
+      changes:{batter:null,pitcher,battingTeam:bT,bD:{},pD:{R:1,ER:1},runsAdded:1,hitsAdded:0,outsAdded:0,clearBases:false,batterAdvanced:false} });
+    save(); renderGame();
+  }
+}
+
+function finalizeAtBat() {
+  const g = state.game; if (!g) return;
+  g.awaitingBatterAdvance = false;
+  advanceBatter(); save(); renderGame();
 }
 
 function renderLog() {
@@ -739,11 +795,45 @@ function recordStat(key, extra) {
     return;
   }
 
-  // Commit
+  // ── Double Play (2 outs, 1 AB) — handled separately ──────────────────────
+  if (key === 'dp') {
+    const pitcher=document.getElementById('selectPitcher').value;
+    const bT=g.halfInning;
+    const bp=state.playerStats[batter], pp=state.playerStats[pitcher];
+    bp.AB=(bp.AB||0)+1;
+    const bD={AB:1}, pD={};
+    const label=`Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`;
+    const msg=`${batter} — Double Play (2 outs)`;
+    g.outs+=2;
+    g.log.push({t:label,msg,changes:{batter,pitcher,battingTeam:bT,bD,pD,runsAdded:0,hitsAdded:0,outsAdded:2,clearBases:false,batterAdvanced:true}});
+    advanceBatter(); save();
+    if(g.outs>=g.outsPerInning) endHalfInning(); else renderGame();
+    return;
+  }
+
+  // ── Two-Run Rule (1 out, 2 runs, no AB) ───────────────────────────────────
+  if (key === 'two_run') {
+    const pitcher=document.getElementById('selectPitcher').value;
+    const bT=g.halfInning;
+    const pp=state.playerStats[pitcher];
+    if(pp){ pp.R=(pp.R||0)+2; pp.ER=(pp.ER||0)+2; }
+    const pD={R:2,ER:2};
+    const label=`Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`;
+    const msg=`Two-Run Rule — 1 out traded for 2 runs`;
+    g.currentRunsThisHalf+=2; g.outs++;
+    g.log.push({t:label,msg,changes:{batter:null,pitcher,battingTeam:bT,bD:{},pD,runsAdded:2,hitsAdded:0,outsAdded:1,clearBases:false,batterAdvanced:false}});
+    save();
+    if(g.outs>=g.outsPerInning) endHalfInning(); else renderGame();
+    return;
+  }
+
+  // ── All other events ───────────────────────────────────────────────────────
   const pitcher=document.getElementById('selectPitcher').value;
   const bT=g.halfInning;
   const bp=state.playerStats[batter], pp=state.playerStats[pitcher];
-  let msg='', out=false, isHit=false, advBatter=true;
+  let msg='', out=false, isHit=false;
+  // Reach events set awaitingBatterAdvance instead of advancing immediately
+  const isReachEvent = ['single','double','triple','bb','error','hbp'].includes(key);
   const bD={}, pD={};
   let runsAdded=0, hitsAdded=0, outsAdded=0, clearBases=false;
   const rbi=extra||0;
@@ -756,23 +846,37 @@ function recordStat(key, extra) {
     case 'double': applyB({AB:1,H:1,RBI:rbi}); applyP({HA:1,R:rbi,ER:rbi}); isHit=true; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} doubles${rbi?` — ${rbi} RBI`:''}`; break;
     case 'triple': applyB({AB:1,H:1,RBI:rbi}); applyP({HA:1,R:rbi,ER:rbi}); isHit=true; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} triples${rbi?` — ${rbi} RBI`:''}`; break;
     case 'hr': { const r=extra||1; applyB({AB:1,H:1,HR:1,RBI:r}); applyP({HA:1,R:r,ER:r}); isHit=true; runsAdded=r; clearBases=true; g.currentRunsThisHalf+=r; g.bases=[false,false,false]; msg=`${batter} HOME RUN! 💣 — ${r} run${r>1?'s':''}`; break; }
-    case 'bb':  applyB({BB:1,RBI:rbi}); applyP({BBp:1,R:rbi,ER:rbi}); runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} walks (BB)${rbi?` — ${rbi} RBI`:''}`; break;
-    case 'k':   applyB({AB:1,K:1}); applyP({Kp:1}); out=true; outsAdded=1; msg=`${batter} strikes out`; break;
-    case 'go':  applyB({AB:1,RBI:rbi}); applyP({R:rbi,ER:rbi}); out=true; outsAdded=1; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} grounds out${rbi?` — ${rbi} RBI`:''}`; break;
-    case 'fo':  applyB({AB:1,RBI:rbi}); applyP({R:rbi,ER:rbi}); out=true; outsAdded=1; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} flies out${rbi?` — ${rbi} RBI`:''}`; break;
-    case 'run': applyP({R:1,ER:1}); runsAdded=1; g.currentRunsThisHalf++; msg=`Run scored (${state.teams[bT].name})`; advBatter=false; break;
-    case 'rbi': { const n=extra||1; applyB({RBI:n}); applyP({R:n,ER:n}); runsAdded=n; g.currentRunsThisHalf+=n; msg=`${batter} — ${n} RBI (${n} run${n>1?'s':''} scored)`; advBatter=false; break; }
+    case 'bb':    applyB({BB:1,RBI:rbi}); applyP({BBp:1,R:rbi,ER:rbi}); runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} walks (BB)${rbi?` — ${rbi} RBI`:''}`; break;
+    case 'k':     applyB({AB:1,K:1}); applyP({Kp:1}); out=true; outsAdded=1; msg=`${batter} strikes out`; break;
+    case 'go':    applyB({AB:1,RBI:rbi}); applyP({R:rbi,ER:rbi}); out=true; outsAdded=1; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} grounds out${rbi?` — ${rbi} RBI`:''}`; break;
+    case 'fo':    applyB({AB:1,RBI:rbi}); applyP({R:rbi,ER:rbi}); out=true; outsAdded=1; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} flies out${rbi?` — ${rbi} RBI`:''}`; break;
+    case 'run':   applyP({R:1,ER:1}); runsAdded=1; g.currentRunsThisHalf++; msg=`Run scored (${state.teams[bT].name})`; break;
+    case 'rbi':   { const n=extra||1; applyB({RBI:n}); applyP({R:n,ER:n}); runsAdded=n; g.currentRunsThisHalf+=n; msg=`${batter} — ${n} RBI (${n} run${n>1?'s':''} scored)`; break; }
     case 'error': msg=`Error — ${batter} reaches`; break;
-    case 'hbp': applyB({BB:1,RBI:rbi}); applyP({BBp:1,R:rbi,ER:rbi}); runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} hit by pitch${rbi?` — ${rbi} RBI`:''}`; break;
+    case 'hbp':   applyB({BB:1,RBI:rbi}); applyP({BBp:1,R:rbi,ER:rbi}); runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} hit by pitch${rbi?` — ${rbi} RBI`:''}`; break;
   }
 
   if(isHit){ g.currentHitsThisHalf++; hitsAdded=1; }
+
+  // Determine if batter should advance now or wait for post-play confirmation
+  const advNow = !isReachEvent && key!=='run' && key!=='rbi';
+
   g.log.push({ t:`Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`, msg,
-    changes:{batter,pitcher,battingTeam:bT,bD,pD,runsAdded,hitsAdded,outsAdded,clearBases,batterAdvanced:advBatter} });
-  if(advBatter) advanceBatter();
-  save();
-  if(out){ g.outs++; if(g.outs>=g.outsPerInning) endHalfInning(); else renderGame(); }
-  else renderGame();
+    changes:{batter,pitcher,battingTeam:bT,bD,pD,runsAdded,hitsAdded,outsAdded,clearBases,batterAdvanced:advNow} });
+
+  if (isReachEvent) {
+    // Park the batter — show post-play panel for additional events
+    g.awaitingBatterAdvance = true;
+    g.lastPlaySummary = msg;
+    save(); renderGame();
+  } else if (out) {
+    g.outs++;
+    save();
+    if(g.outs>=g.outsPerInning) endHalfInning(); else { advanceBatter(); renderGame(); }
+  } else {
+    // run / rbi annotations — no batter change
+    save(); renderGame();
+  }
 }
 
 // ── INNING CONTROL ───────────────────────────────────────────────────────────
@@ -794,6 +898,7 @@ function endHalfInning() {
   g.hits[bT][g.currentInning-1] =g.currentHitsThisHalf;
   g.currentRunsThisHalf=0; g.currentHitsThisHalf=0;
   g.outs=0; g.bases=[false,false,false];
+  g.awaitingBatterAdvance=false; g.lastPlaySummary='';
   if(g.halfInning===0) { g.halfInning=1; }
   else { if(g.currentInning>=g.innings){ endGame(); return; } g.currentInning++; g.halfInning=0; }
   save(); renderGame();
@@ -806,6 +911,7 @@ function changeHalf(dir) {
   const max=g.innings*2-1;
   if(abs>max){ endGame(); return; }
   g.halfInning=abs%2; g.currentInning=Math.floor(abs/2)+1; g.outs=0;
+  g.awaitingBatterAdvance=false; g.lastPlaySummary='';
   save(); renderGame();
 }
 
