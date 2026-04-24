@@ -679,11 +679,11 @@ function renderScoreboard() {
     for(let i=0;i<n;i++) {
       const r=g.score[t][i], h=g.hits[t][i];
       const act=(g.currentInning-1)===i && g.halfInning===t && !g.gameOver;
-      if (r!==null)   { tR+=r; tH+=(h||0); row+=tile(r); }
+      if (r!=null && typeof r==='number') { tR+=r; tH+=(h||0); row+=tile(r); }
       else if (act)   { tR+=g.currentRunsThisHalf; tH+=g.currentHitsThisHalf; row+=tile(g.currentRunsThisHalf,'active'); }
       else             { row+=tile('·','dash'); }
     }
-    row+=tile(tR,'total')+tile(tH,'htotal')+`</div>`;
+    row+=tile(isNaN(tR)?0:tR,'total')+tile(isNaN(tH)?0:tH,'htotal')+`</div>`;
     rows+=row;
   });
   document.getElementById('scoreboard').innerHTML =
