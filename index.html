@@ -510,11 +510,46 @@ let sortState = { batting:{ col:'AVG', asc:false }, pitching:{ col:'ERA', asc:tr
 let sessionAdminLoggedIn = false;
 
 // Ensures all array fields are proper arrays (Firebase can turn empty arrays to null)
+// Firebase can return arrays as objects {0:'P1',1:'P2'} — this converts them back
+function toArray(val) {
+  if (!val) return [];
+  if (Array.isArray(val)) return val;
+  // Firebase-style object with numeric keys
+  return Object.keys(val)
+    .sort((a,b) => parseInt(a)-parseInt(b))
+    .map(k => val[k])
+    .filter(v => v != null);
+}
+
 function normalizeState() {
-  if (!Array.isArray(state.teams)) state.teams = [{ name:'Away', players:[] }, { name:'Home', players:[] }];
-  state.teams.forEach(t => { if (!Array.isArray(t.players)) t.players = []; });
-  if (!Array.isArray(state.games)) state.games = [];
-  if (!state.playerStats || typeof state.playerStats !== 'object') state.playerStats = {};
+  if (!state.teams || typeof state.teams !== 'object') {
+    state.teams = [{ name:'Away', players:[] }, { name:'Home', players:[] }];
+  }
+  // Convert teams itself if Firebase returned it as an object
+  if (!Array.isArray(state.teams)) state.teams = toArray(state.teams);
+  // Ensure exactly 2 teams
+  while (state.teams.length < 2) state.teams.push({ name: state.teams.length===0?'Away':'Home', players:[] });
+  // Normalize each team's players
+  state.teams.forEach(t => {
+    if (!t) return;
+    if (!t.players) t.players = [];
+    else t.players = toArray(t.players).filter(p => typeof p === 'string');
+  });
+  // Normalize games array
+  if (!state.games) state.games = [];
+  else state.games = toArray(state.games).filter(g => g && typeof g === 'object');
+  // Normalize playerStats
+  if (!state.playerStats || typeof state.playerStats !== 'object' || Array.isArray(state.playerStats)) {
+    state.playerStats = {};
+  }
+  // Normalize savedTeams
+  if (!state.savedTeams || typeof state.savedTeams !== 'object' || Array.isArray(state.savedTeams)) {
+    state.savedTeams = {};
+  }
+  // Normalize savedTeam player lists
+  Object.values(state.savedTeams||{}).forEach(st => {
+    if (st && !Array.isArray(st.players)) st.players = toArray(st.players);
+  });
 }
 
 function save() {
@@ -1496,24 +1531,30 @@ function exportData() {
 function importData(event) {
   const file=event.target.files[0]; if(!file) return;
   const status=document.getElementById('importStatus');
-  new FileReader().onload=e=>{
+  const reader=new FileReader();
+  reader.onload=e=>{
     try {
       const imp=JSON.parse(e.target.result);
-      if(!imp.teams||!Array.isArray(imp.teams)) throw new Error('Invalid file.');
+      if(!imp.teams) throw new Error('Invalid file.');
+      const gameCount   = imp.games?.length || toArray(imp.games)?.length || 0;
+      const playerCount = Object.keys(imp.playerStats||{}).length;
       openModal('Import Data?',
-        `<p style="color:var(--muted);font-size:.9rem">Replace all current data with this file?<br><br>Found: <strong style="color:var(--text)">${imp.games?.length||0} game(s)</strong>, <strong style="color:var(--text)">${Object.keys(imp.playerStats||{}).length} player(s)</strong>.</p>`,
-        ()=>{ state={...state,...imp}; save();
+        `<p style="color:var(--muted);font-size:.9rem">Replace all current data with this file?<br><br>
+         Found: <strong style="color:var(--text)">${gameCount} game(s)</strong>,
+         <strong style="color:var(--text)">${playerCount} player(s)</strong>.</p>`,
+        ()=>{ state={...state,...imp}; normalizeState(); save();
           document.getElementById('team1name').value=state.teams[0].name;
           document.getElementById('team2name').value=state.teams[1].name;
           renderSetupPlayers(); renderStats(); renderHistory(); populateTeamFilter(); renderAdminCard();
-          if(status){ status.style.display='block'; status.style.color='var(--green)'; status.textContent=`✅ Imported — ${imp.games?.length||0} game(s), ${Object.keys(imp.playerStats||{}).length} player(s).`; } });
+          if(status){ status.style.display='block'; status.style.color='var(--green)';
+            status.textContent=`✅ Imported — ${gameCount} game(s), ${playerCount} player(s).`; } });
     } catch(err) {
-      if(status){ status.style.display='block'; status.style.color='var(--accent)'; status.textContent=`❌ Import failed: ${err.message}`; }
+      if(status){ status.style.display='block'; status.style.color='var(--accent)';
+        status.textContent=`❌ Import failed: ${err.message}`; }
     }
     event.target.value='';
   };
-  (new FileReader()).onload; // ensure closure
-  const r=new FileReader(); r.onload=e=>{ /* handled above */ }; r.readAsText(file);
+  reader.readAsText(file);
 }
 
 // ── MODAL ────────────────────────────────────────────────────────────────────
