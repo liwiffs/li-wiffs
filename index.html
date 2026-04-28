@@ -112,6 +112,15 @@ tr:hover td { background: rgba(255,255,255,.03); }
 .atbat-label { font-size:.75rem; color:var(--muted); }
 .atbat-name  { font-size:1rem; font-weight:700; color:var(--text); }
 
+/* ── PLAYER ROWS (drag-to-reorder) ── */
+.player-row { display:flex; gap:6px; margin-bottom:6px; align-items:center; border-radius:6px; transition:background .15s; }
+.player-row.drag-over { background:rgba(249,115,22,.15); outline:2px dashed var(--primary); }
+.drag-handle { cursor:grab; color:var(--muted); font-size:1.1rem; padding:0 4px; user-select:none; flex-shrink:0; }
+.drag-handle:active { cursor:grabbing; }
+.reorder-btn { background:transparent; border:1px solid #446; color:var(--muted); border-radius:4px; padding:4px 7px; cursor:pointer; font-size:.75rem; flex-shrink:0; line-height:1; }
+.reorder-btn:hover { border-color:var(--primary); color:var(--primary); }
+.saved-team-hint { display:none; margin:6px 0 10px; background:rgba(249,115,22,.12); border:1px solid var(--primary); border-radius:6px; padding:8px 12px; font-size:.82rem; color:var(--text); align-items:center; justify-content:space-between; gap:8px; }
+
 /* ── STAT BUTTONS ── */
 .stat-btn-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(130px,1fr)); gap:8px; margin-top:10px; }
 .stat-btn { background:var(--mid); border:1px solid #334; color:var(--text); padding:10px 8px; border-radius:8px; cursor:pointer; font-size:.82rem; text-align:center; transition:background .15s,border-color .15s; }
@@ -204,13 +213,23 @@ tr:hover td { background: rgba(255,255,255,.03); }
     <div class="row">
       <div>
         <h3>Away Team</h3>
-        <input id="team1name" placeholder="Away team name" value="Away" />
+        <input id="team1name" placeholder="Away team name" value="Away"
+               oninput="onTeamNameInput(1)" />
+        <div id="savedHint1" class="saved-team-hint">
+          <span>💾 Saved lineup found!</span>
+          <button class="btn btn-primary" style="padding:5px 14px;font-size:.8rem" onclick="loadSavedTeam(1)">Load Lineup</button>
+        </div>
         <div id="team1players"></div>
         <button class="btn btn-ghost" style="margin-top:4px" onclick="addPlayer(1)">+ Add Player</button>
       </div>
       <div>
         <h3>Home Team</h3>
-        <input id="team2name" placeholder="Home team name" value="Home" />
+        <input id="team2name" placeholder="Home team name" value="Home"
+               oninput="onTeamNameInput(2)" />
+        <div id="savedHint2" class="saved-team-hint">
+          <span>💾 Saved lineup found!</span>
+          <button class="btn btn-primary" style="padding:5px 14px;font-size:.8rem" onclick="loadSavedTeam(2)">Load Lineup</button>
+        </div>
         <div id="team2players"></div>
         <button class="btn btn-ghost" style="margin-top:4px" onclick="addPlayer(2)">+ Add Player</button>
       </div>
@@ -235,6 +254,19 @@ tr:hover td { background: rgba(255,255,255,.03); }
           <option value="2">2 outs</option>
           <option value="3" selected>3 outs</option>
         </select>
+      </div>
+    </div>
+    <div style="margin-top:14px;margin-bottom:14px">
+      <h3 style="margin-bottom:10px">Starting Pitchers</h3>
+      <div class="row">
+        <div>
+          <label style="font-size:.8rem;color:var(--muted)" id="awayPitcherLabel">Away Pitcher</label>
+          <select id="awayStartingPitcher" style="margin-top:4px"></select>
+        </div>
+        <div>
+          <label style="font-size:.8rem;color:var(--muted)" id="homePitcherLabel">Home Pitcher</label>
+          <select id="homeStartingPitcher" style="margin-top:4px"></select>
+        </div>
       </div>
     </div>
     <button class="btn btn-primary" onclick="startGame()">▶ Start Game</button>
@@ -467,6 +499,7 @@ function setSyncUI(status) {
 // ── STATE ────────────────────────────────────────────────────────────────────
 let state = {
   teams:       [{ name:'Away', players:[] }, { name:'Home', players:[] }],
+  savedTeams:  {},   // { "TeamName": { players:['P1','P2',...] } }
   settings:    { innings:7, outsPerInning:3 },
   game:        null,
   games:       [],
@@ -544,6 +577,7 @@ document.getElementById('headerDate').textContent =
 document.getElementById('team1name').value = state.teams[0].name;
 document.getElementById('team2name').value = state.teams[1].name;
 renderSetupPlayers();
+renderStartingPitcherSelects();
 renderStats();
 renderHistory();
 populateTeamFilter();
@@ -557,7 +591,7 @@ function showPage(id) {
     b.classList.toggle('active', ['setup','game','stats','teams','history'][i] === id);
   });
   document.getElementById('page-'+id).classList.add('active');
-  if (id === 'setup')   { renderSetupPlayers(); renderAdminCard(); }
+  if (id === 'setup')   { renderSetupPlayers(); renderAdminCard(); renderStartingPitcherSelects(); }
   if (id === 'stats')   renderStats();
   if (id === 'teams')   { populateTeamFilter(); renderTeamStats(); }
   if (id === 'history') renderHistory();
@@ -565,32 +599,92 @@ function showPage(id) {
 }
 
 // ── SETUP PLAYERS ────────────────────────────────────────────────────────────
+let _dragSrcT=null, _dragSrcI=null;
+
 function renderSetupPlayers() {
   [1,2].forEach(t => {
     const div = document.getElementById('team'+t+'players');
     if (!div) return;
     div.innerHTML = '';
-    state.teams[t-1].players.forEach((p,i) => {
+    const players = state.teams[t-1].players;
+    players.forEach((p,i) => {
       const row = document.createElement('div');
-      row.style.cssText = 'display:flex;gap:6px;margin-bottom:6px';
-      row.innerHTML = `<input value="${p}" oninput="updatePlayer(${t},${i},this.value)" style="margin:0"/>
-        <button class="btn btn-ghost" style="flex:0;padding:6px 10px;color:var(--accent);border-color:var(--accent)"
+      row.className = 'player-row';
+      row.setAttribute('draggable','true');
+      row.ondragstart = e => { _dragSrcT=t; _dragSrcI=i; e.dataTransfer.effectAllowed='move'; setTimeout(()=>row.style.opacity='.4',0); };
+      row.ondragend   = e => { row.style.opacity=''; document.querySelectorAll('.player-row').forEach(r=>r.classList.remove('drag-over')); };
+      row.ondragover  = e => { e.preventDefault(); e.dataTransfer.dropEffect='move'; document.querySelectorAll('.player-row').forEach(r=>r.classList.remove('drag-over')); row.classList.add('drag-over'); };
+      row.ondrop      = e => { e.preventDefault(); row.classList.remove('drag-over'); if(_dragSrcT!==t||_dragSrcI===i) return; const pl=state.teams[t-1].players; const [m]=pl.splice(_dragSrcI,1); pl.splice(i,0,m); _dragSrcT=null; _dragSrcI=null; save(); renderSetupPlayers(); };
+      row.innerHTML = `
+        <span class="drag-handle" title="Drag to reorder">⠿</span>
+        <input value="${p}" oninput="updatePlayer(${t},${i},this.value)" style="margin:0;flex:1"/>
+        <button class="reorder-btn" onclick="movePlayer(${t},${i},-1)" title="Move up" ${i===0?'disabled':''}>↑</button>
+        <button class="reorder-btn" onclick="movePlayer(${t},${i},1)"  title="Move down" ${i===players.length-1?'disabled':''}>↓</button>
+        <button class="btn btn-ghost" style="flex:0;padding:5px 10px;color:var(--accent);border-color:var(--accent)"
           onclick="confirmRemovePlayer(${t},${i})">✕</button>`;
       div.appendChild(row);
     });
   });
+  renderStartingPitcherSelects();
 }
+
+function movePlayer(t, i, dir) {
+  const pl = state.teams[t-1].players;
+  const ni = i + dir;
+  if (ni < 0 || ni >= pl.length) return;
+  [pl[i], pl[ni]] = [pl[ni], pl[i]];
+  save(); renderSetupPlayers();
+}
+
 function addPlayer(t) {
   if (!Array.isArray(state.teams[t-1].players)) state.teams[t-1].players = [];
   state.teams[t-1].name = document.getElementById('team'+t+'name').value || state.teams[t-1].name;
   state.teams[t-1].players.push('Player '+(state.teams[t-1].players.length+1));
   save(); renderSetupPlayers();
 }
-function updatePlayer(t,i,v) { state.teams[t-1].players[i]=v; save(); }
+function updatePlayer(t,i,v) { state.teams[t-1].players[i]=v; save(); renderStartingPitcherSelects(); }
 function confirmRemovePlayer(t,i) {
   const n=state.teams[t-1].players[i];
   openModal('Remove Player?',`<p style="color:var(--muted);font-size:.9rem">Remove <strong style="color:var(--text)">${n}</strong>? Stats are kept.</p>`,
     ()=>{ state.teams[t-1].players.splice(i,1); save(); renderSetupPlayers(); });
+}
+
+// ── Starting pitcher selects ─────────────────────────────────────────────────
+function renderStartingPitcherSelects() {
+  [0,1].forEach(t => {
+    const selId = t===0 ? 'awayStartingPitcher' : 'homeStartingPitcher';
+    const lblId = t===0 ? 'awayPitcherLabel'    : 'homePitcherLabel';
+    const sel = document.getElementById(selId);
+    const lbl = document.getElementById(lblId);
+    if (!sel) return;
+    const name    = state.teams[t].name || (t===0?'Away':'Home');
+    if (lbl) lbl.textContent = name+' Starting Pitcher';
+    const players = state.teams[t].players;
+    const prev    = sel.value;
+    sel.innerHTML = players.length
+      ? players.map(p=>`<option${p===prev?' selected':''}>${p}</option>`).join('')
+      : `<option value="">— add players first —</option>`;
+  });
+}
+
+// ── Saved team hints ─────────────────────────────────────────────────────────
+function onTeamNameInput(t) {
+  const name  = (document.getElementById('team'+t+'name')?.value||'').trim();
+  const hint  = document.getElementById('savedHint'+t);
+  const saved = state.savedTeams && state.savedTeams[name];
+  if (hint) hint.style.display = (saved && saved.players?.length) ? 'flex' : 'none';
+  renderStartingPitcherSelects();
+}
+
+function loadSavedTeam(t) {
+  const name   = (document.getElementById('team'+t+'name')?.value||'').trim();
+  const saved  = state.savedTeams && state.savedTeams[name];
+  if (!saved || !saved.players?.length) return;
+  state.teams[t-1].name    = name;
+  state.teams[t-1].players = [...saved.players];
+  const hint = document.getElementById('savedHint'+t);
+  if (hint) hint.style.display = 'none';
+  save(); renderSetupPlayers();
 }
 
 // ── GAME INIT ────────────────────────────────────────────────────────────────
@@ -600,9 +694,23 @@ function startGame() {
   if (!state.teams[0].players.length || !state.teams[1].players.length) {
     alert('Please add at least one player to each team first.'); return;
   }
+
+  // Save both lineups under their team names for future games
+  if (!state.savedTeams) state.savedTeams = {};
+  [0,1].forEach(t => {
+    const nm = state.teams[t].name.trim();
+    if (nm) state.savedTeams[nm] = { players:[...state.teams[t].players] };
+  });
+
   const innings = parseInt(document.getElementById('totalInnings').value);
   const outs    = parseInt(document.getElementById('outsPerInning').value);
   state.settings = { innings, outsPerInning:outs };
+
+  // Read starting pitchers from the selects
+  const awayStartP = document.getElementById('awayStartingPitcher')?.value || '';
+  const homeStartP = document.getElementById('homeStartingPitcher')?.value || '';
+  // index 0 = Away is pitching (Home bats), index 1 = Home is pitching (Away bats)
+  const startingPitchers = [awayStartP, homeStartP];
   state.game = {
     date: new Date().toISOString(), innings, outsPerInning:outs,
     currentInning:1, halfInning:0, outs:0,
@@ -612,7 +720,7 @@ function startGame() {
     bases:[false,false,false], batterIndex:[0,0],
     awaitingBatterAdvance:false, lastPlaySummary:'',
     gameEndMessage:'',
-    currentPitchers:['',''],
+    currentPitchers: startingPitchers,
     log:[], gameOver:false
   };
   ensurePlayerStats(); save();
