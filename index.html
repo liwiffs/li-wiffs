@@ -312,7 +312,7 @@ tr:hover td { background: rgba(255,255,255,.03); }
         <div style="font-size:.88rem;color:var(--muted);padding:5px 0" id="onDeckName">—</div>
         <div style="margin-top:10px">
           <label style="font-size:.75rem;color:var(--muted)">Pitcher</label>
-          <select id="selectPitcher" style="margin-top:4px"></select>
+          <select id="selectPitcher" style="margin-top:4px" onchange="savePitcherChoice(this.value)"></select>
         </div>
       </div>
     </div>
@@ -612,6 +612,7 @@ function startGame() {
     bases:[false,false,false], batterIndex:[0,0],
     awaitingBatterAdvance:false, lastPlaySummary:'',
     gameEndMessage:'',
+    currentPitchers:['',''],
     log:[], gameOver:false
   };
   ensurePlayerStats(); save();
@@ -718,8 +719,21 @@ function renderAtBatIndicator() {
 }
 function renderPitcherSelect() {
   const g=state.game; if(!g) return;
+  const pT=1-g.halfInning, players=state.teams[pT].players;
+  if(!players.length) return;
+  if(!g.currentPitchers) g.currentPitchers=['',''];
+  const saved=g.currentPitchers[pT];
+  const current=(saved && players.includes(saved)) ? saved : players[0];
+  g.currentPitchers[pT]=current;
   document.getElementById('selectPitcher').innerHTML =
-    state.teams[1-g.halfInning].players.map(p=>`<option>${p}</option>`).join('');
+    players.map(p=>`<option${p===current?' selected':''}>${p}</option>`).join('');
+}
+
+function savePitcherChoice(name) {
+  const g=state.game; if(!g) return;
+  if(!g.currentPitchers) g.currentPitchers=['',''];
+  g.currentPitchers[1-g.halfInning]=name;
+  save();
 }
 function currentBatter() {
   const g=state.game, bT=g.halfInning, pl=state.teams[bT].players;
@@ -930,7 +944,8 @@ function recordStat(key, extra) {
     save();
     if(g.outs>=g.outsPerInning) endHalfInning(); else { advanceBatter(); renderGame(); }
   } else {
-    // run / rbi annotations — no batter change
+    // HR and other decisive at-bats advance the batter; run/rbi annotations do not
+    if (!['run','rbi'].includes(key)) advanceBatter();
     save(); renderGame();
   }
 }
