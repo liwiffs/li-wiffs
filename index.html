@@ -511,6 +511,11 @@ let sessionAdminLoggedIn = false;
 
 // Ensures all array fields are proper arrays (Firebase can turn empty arrays to null)
 // Firebase can return arrays as objects {0:'P1',1:'P2'} — this converts them back
+// Firebase forbids . # $ / [ ] in key names — replace with underscores
+function sanitizeKey(str) {
+  return (str||'').replace(/[.#$\[\]/]/g, '_').trim() || '_';
+}
+
 function toArray(val) {
   if (!val) return [];
   if (Array.isArray(val)) return val;
@@ -706,14 +711,14 @@ function renderStartingPitcherSelects() {
 function onTeamNameInput(t) {
   const name  = (document.getElementById('team'+t+'name')?.value||'').trim();
   const hint  = document.getElementById('savedHint'+t);
-  const saved = state.savedTeams && state.savedTeams[name];
+  const saved = state.savedTeams && state.savedTeams[sanitizeKey(name)];
   if (hint) hint.style.display = (saved && saved.players?.length) ? 'flex' : 'none';
   renderStartingPitcherSelects();
 }
 
 function loadSavedTeam(t) {
   const name   = (document.getElementById('team'+t+'name')?.value||'').trim();
-  const saved  = state.savedTeams && state.savedTeams[name];
+  const saved  = state.savedTeams && state.savedTeams[sanitizeKey(name)];
   if (!saved || !saved.players?.length) return;
   state.teams[t-1].name    = name;
   state.teams[t-1].players = [...saved.players];
@@ -751,7 +756,7 @@ function startGame() {
     if (!state.savedTeams) state.savedTeams = {};
     [0,1].forEach(t => {
       const nm = state.teams[t].name.trim();
-      if (nm) state.savedTeams[nm] = { players: [...state.teams[t].players] };
+      if (nm) state.savedTeams[sanitizeKey(nm)] = { players: [...state.teams[t].players] };
     });
 
     const innings = parseInt(document.getElementById('totalInnings').value);
