@@ -944,7 +944,7 @@ function recordPostPlay(key) {
     g.log.push({ t:label, msg:'Baserunner out on bases',
       changes:{batter:null,pitcher,battingTeam:bT,bD:{},pD:{},runsAdded:0,hitsAdded:0,outsAdded:1,clearBases:false,batterAdvanced:false} });
     save();
-    if (g.outs >= g.outsPerInning) { g.awaitingBatterAdvance=false; endHalfInning(); return; }
+    if (g.outs >= g.outsPerInning) { g.awaitingBatterAdvance=false; advanceBatter(); endHalfInning(); return; }
     renderGame();
   }
 
