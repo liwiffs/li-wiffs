@@ -1139,7 +1139,8 @@ function recordStat(key, extra) {
   } else if (out) {
     g.outs++;
     save();
-    if(g.outs>=g.outsPerInning) endHalfInning(); else { advanceBatter(); renderGame(); }
+    advanceBatter();
+    if(g.outs>=g.outsPerInning) endHalfInning(); else renderGame();
   } else {
     // HR and other decisive at-bats advance the batter; run/rbi annotations do not
     if (!['run','rbi'].includes(key)) advanceBatter();
