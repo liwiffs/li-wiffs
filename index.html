@@ -888,20 +888,22 @@ function advanceBatter() {
 }
 
 const STAT_BUTTONS = [
-  {icon:'🎯',label:'Single',       key:'single'},
-  {icon:'✌️',label:'Double',       key:'double'},
-  {icon:'🔱',label:'Triple',       key:'triple'},
-  {icon:'💣',label:'Home Run',     key:'hr'},
-  {icon:'🚶',label:'Walk (BB)',    key:'bb'},
-  {icon:'💨',label:'Strikeout',    key:'k'},
-  {icon:'🔁',label:'Groundout',    key:'go'},
-  {icon:'☁️',label:'Flyout',       key:'fo'},
-  {icon:'🔄',label:'Double Play',  key:'dp'},
-  {icon:'⚡',label:'Two-Run Rule', key:'two_run'},
-  {icon:'🏃',label:'Run Scored',   key:'run'},
-  {icon:'🎖️',label:'RBI',         key:'rbi'},
-  {icon:'❌',label:'Error',        key:'error'},
-  {icon:'💢',label:'HBP',          key:'hbp'},
+  {icon:'🎯',label:'Single',          key:'single'},
+  {icon:'✌️',label:'Double',          key:'double'},
+  {icon:'🔱',label:'Triple',          key:'triple'},
+  {icon:'💣',label:'Home Run',        key:'hr'},
+  {icon:'🚶',label:'Walk (BB)',       key:'bb'},
+  {icon:'💨',label:'Strikeout',       key:'k'},
+  {icon:'🔁',label:'Groundout',       key:'go'},
+  {icon:'☁️',label:'Flyout',          key:'fo'},
+  {icon:'↗️',label:'Line Out',        key:'lo'},
+  {icon:'🔀',label:"Fielder's Choice",key:'fc'},
+  {icon:'🔄',label:'Double Play',     key:'dp'},
+  {icon:'⚡',label:'Two-Run Rule',    key:'two_run'},
+  {icon:'🏃',label:'Run Scored',      key:'run'},
+  {icon:'🎖️',label:'RBI',            key:'rbi'},
+  {icon:'❌',label:'Error',           key:'error'},
+  {icon:'💢',label:'HBP',             key:'hbp'},
 ];
 function renderStatButtons() {
   const g = state.game;
@@ -971,7 +973,7 @@ function renderLog() {
 }
 
 // ── RECORD STAT ──────────────────────────────────────────────────────────────
-const RBI_KEYS = new Set(['single','double','triple','bb','go','fo','hbp']);
+const RBI_KEYS = new Set(['single','double','triple','bb','go','fo','lo','fc','hbp']);
 
 function recordStat(key, extra) {
   const g=state.game; if(!g||g.gameOver) return;
@@ -1040,6 +1042,25 @@ function recordStat(key, extra) {
     return;
   }
 
+  // ── Fielder's Choice (1 AB, forced out on baserunner, batter reaches) ──────
+  if (key === 'fc') {
+    const pitcher=document.getElementById('selectPitcher').value;
+    const bT=g.halfInning;
+    const bp=state.playerStats[batter], pp=state.playerStats[pitcher];
+    const rbi = extra||0;
+    if(bp){ bp.AB=(bp.AB||0)+1; bp.RBI=(bp.RBI||0)+rbi; }
+    if(pp && rbi){ pp.R=(pp.R||0)+rbi; pp.ER=(pp.ER||0)+rbi; }
+    const bD={AB:1,RBI:rbi}, pD=rbi?{R:rbi,ER:rbi}:{};
+    const label=`Inn ${g.currentInning} ${g.halfInning===0?'▲':'▼'}`;
+    const msg=`${batter} — Fielder's Choice${rbi?` (${rbi} RBI)`:''} — reaches safely`;
+    g.outs++; g.currentRunsThisHalf+=rbi;
+    g.log.push({t:label,msg,changes:{batter,pitcher,battingTeam:bT,bD,pD,runsAdded:rbi,hitsAdded:0,outsAdded:1,clearBases:false,batterAdvanced:false}});
+    save();
+    if(g.outs>=g.outsPerInning){ advanceBatter(); endHalfInning(); }
+    else { g.awaitingBatterAdvance=true; g.lastPlaySummary=msg; renderGame(); }
+    return;
+  }
+
   // ── All other events ───────────────────────────────────────────────────────
   const pitcher=document.getElementById('selectPitcher').value;
   const bT=g.halfInning;
@@ -1063,6 +1084,7 @@ function recordStat(key, extra) {
     case 'k':     applyB({AB:1,K:1}); applyP({Kp:1}); out=true; outsAdded=1; msg=`${batter} strikes out`; break;
     case 'go':    applyB({AB:1,RBI:rbi}); applyP({R:rbi,ER:rbi}); out=true; outsAdded=1; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} grounds out${rbi?` — ${rbi} RBI`:''}`; break;
     case 'fo':    applyB({AB:1,RBI:rbi}); applyP({R:rbi,ER:rbi}); out=true; outsAdded=1; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} flies out${rbi?` — ${rbi} RBI`:''}`; break;
+    case 'lo':    applyB({AB:1,RBI:rbi}); applyP({R:rbi,ER:rbi}); out=true; outsAdded=1; runsAdded=rbi; g.currentRunsThisHalf+=rbi; msg=`${batter} lines out${rbi?` — ${rbi} RBI`:''}`; break;
     case 'run':   applyP({R:1,ER:1}); runsAdded=1; g.currentRunsThisHalf++; msg=`Run scored (${state.teams[bT].name})`; break;
     case 'rbi':   { const n=extra||1; applyB({RBI:n}); applyP({R:n,ER:n}); runsAdded=n; g.currentRunsThisHalf+=n; msg=`${batter} — ${n} RBI (${n} run${n>1?'s':''} scored)`; break; }
     case 'error': msg=`Error — ${batter} reaches`; break;
