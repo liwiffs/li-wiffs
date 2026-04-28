@@ -354,7 +354,7 @@ tr:hover td { background: rgba(255,255,255,.03); }
     <button class="btn btn-ghost" onclick="changeHalf(-1)" style="flex:0">◀ Prev Half</button>
     <button class="btn btn-ghost" onclick="changeHalf(1)"  style="flex:0">Next Half ▶</button>
     <button class="btn btn-red"   onclick="addOut()"       style="flex:0">+ Out</button>
-    <button class="btn btn-ghost" onclick="showUndoModal()" style="flex:0">↩ Undo Event</button>
+    <button class="btn btn-ghost" onclick="showEditLastEventModal()" style="flex:0">✏️ Edit Last Event</button>
   </div>
 
   <div class="card">
@@ -1275,41 +1275,103 @@ function endGame() {
 }
 
 // ── UNDO ─────────────────────────────────────────────────────────────────────
-function showUndoModal() {
-  const g=state.game; if(!g){ alert('No game in progress.'); return; }
-  const list=g.log.map((e,i)=>({...e,i})).filter(e=>e.changes).reverse();
-  if(!list.length){ openModal('Nothing to Undo','<p style="color:var(--muted);font-size:.9rem">No undoable events.</p>',null,true); return; }
-  const rows=list.map(e=>`
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:7px 0;border-bottom:1px solid #1a3a1a;gap:8px">
-      <div style="min-width:0"><span style="font-size:.74rem;font-weight:700;color:var(--primary)">${e.t}</span>
-      <span style="font-size:.78rem;color:var(--muted);margin-left:6px">${e.msg}</span></div>
-      <button class="btn btn-ghost" style="flex-shrink:0;font-size:.72rem;padding:4px 10px;color:var(--accent);border-color:var(--accent)"
-        onclick="undoEvent(${e.i});closeModal()">↩</button>
-    </div>`).join('');
-  openModal('Undo an Event',
-    `<p style="font-size:.76rem;color:var(--muted);margin-bottom:10px">Stats are fully reversed. Events from completed innings reverse player stats only.</p>
-     <div style="max-height:300px;overflow-y:auto">${rows}</div>`, null, true);
+// ── EDIT / DELETE LAST EVENT ──────────────────────────────────────────────────
+function showEditLastEventModal() {
+  const g = state.game;
+  if (!g) return;
+
+  // Find index of the most recent tracked event
+  let lastIdx = -1;
+  for (let i = g.log.length - 1; i >= 0; i--) {
+    if (g.log[i].changes) { lastIdx = i; break; }
+  }
+
+  if (lastIdx === -1) {
+    openModal('Nothing to Edit',
+      `<p style="color:var(--muted);font-size:.9rem">No recorded events to edit yet.</p>`,
+      null, true);
+    return;
+  }
+
+  const evt = g.log[lastIdx];
+
+  // Build stat button grid (exclude run/rbi annotations — those aren't full at-bat outcomes)
+  const btnGrid = STAT_BUTTONS
+    .filter(s => !['run','rbi'].includes(s.key))
+    .map(s =>
+      `<button class="stat-btn" onclick="replaceLastEvent('${s.key}')">
+         <span class="icon">${s.icon}</span>${s.label}
+       </button>`)
+    .join('');
+
+  openModal('✏️ Edit Last Event',
+    `<div style="background:var(--dark);border-radius:6px;padding:10px 12px;margin-bottom:14px">
+       <div style="font-size:.72rem;color:var(--muted);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px">${evt.t}</div>
+       <div style="font-size:.92rem;font-weight:600;color:var(--text)">${evt.msg}</div>
+     </div>
+     <div style="font-size:.78rem;color:var(--muted);margin-bottom:8px">Change outcome to:</div>
+     <div class="stat-btn-grid" style="margin-top:0">${btnGrid}</div>
+     <div style="border-top:1px solid #1a3a1a;margin-top:14px;padding-top:12px">
+       <button class="btn btn-red" style="width:100%;padding:10px"
+         onclick="deleteLastEvent(${lastIdx})">
+         🗑 Delete This Event Only
+       </button>
+       <p style="font-size:.72rem;color:var(--muted);margin-top:6px;text-align:center">
+         To edit an earlier event, delete backwards one at a time then re-record.
+       </p>
+     </div>`,
+    null, true);
 }
 
-function undoEvent(index) {
-  const g=state.game; if(!g||index<0||index>=g.log.length) return;
-  const c=g.log[index].changes;
-  if(c) {
-    if(c.bD && c.batter && state.playerStats[c.batter])
-      Object.entries(c.bD).forEach(([k,v])=>{ state.playerStats[c.batter][k]=Math.max(0,(state.playerStats[c.batter][k]||0)-v); });
-    if(c.pD && c.pitcher && state.playerStats[c.pitcher])
-      Object.entries(c.pD).forEach(([k,v])=>{ state.playerStats[c.pitcher][k]=Math.max(0,(state.playerStats[c.pitcher][k]||0)-v); });
-    if(g.score[c.battingTeam][g.currentInning-1]===null) {
-      g.currentRunsThisHalf=Math.max(0,g.currentRunsThisHalf-(c.runsAdded||0));
-      g.currentHitsThisHalf=Math.max(0,g.currentHitsThisHalf-(c.hitsAdded||0));
-      g.outs=Math.max(0,g.outs-(c.outsAdded||0));
+function deleteLastEvent(index) {
+  closeModal();
+  _applyEventReversal(index);
+}
+
+function replaceLastEvent(newKey) {
+  // Find last tracked event
+  const g = state.game; if (!g) return;
+  let lastIdx = -1;
+  for (let i = g.log.length - 1; i >= 0; i--) {
+    if (g.log[i].changes) { lastIdx = i; break; }
+  }
+  closeModal();
+  // Reverse the old event first, then record the new one via normal flow (handles pickers)
+  if (lastIdx !== -1) _applyEventReversal(lastIdx);
+  recordStat(newKey);
+}
+
+function _applyEventReversal(index) {
+  const g = state.game; if (!g || index < 0 || index >= g.log.length) return;
+  const c = g.log[index].changes;
+  if (c) {
+    if (c.bD && c.batter && state.playerStats[c.batter])
+      Object.entries(c.bD).forEach(([k,v]) => {
+        state.playerStats[c.batter][k] = Math.max(0, (state.playerStats[c.batter][k]||0) - v);
+      });
+    if (c.pD && c.pitcher && state.playerStats[c.pitcher])
+      Object.entries(c.pD).forEach(([k,v]) => {
+        state.playerStats[c.pitcher][k] = Math.max(0, (state.playerStats[c.pitcher][k]||0) - v);
+      });
+    // Reverse in-progress counters (only if current inning not yet committed)
+    const inningIdx = g.currentInning - 1;
+    if (inningIdx >= 0 && g.score[c.battingTeam] && g.score[c.battingTeam][inningIdx] === null) {
+      g.currentRunsThisHalf = Math.max(0, g.currentRunsThisHalf - (c.runsAdded||0));
+      g.currentHitsThisHalf = Math.max(0, g.currentHitsThisHalf - (c.hitsAdded||0));
+      g.outs                = Math.max(0, g.outs                - (c.outsAdded||0));
     }
-    if(c.batterAdvanced) {
-      const bT=c.battingTeam, len=state.teams[bT].players.length;
-      if(len) g.batterIndex[bT]=(g.batterIndex[bT]-1+len)%len;
+    if (c.batterAdvanced) {
+      const bT = c.battingTeam, len = state.teams[bT].players.length;
+      if (len) g.batterIndex[bT] = (g.batterIndex[bT] - 1 + len) % len;
+    }
+    // Clear post-play state if it was set by this event
+    if (g.awaitingBatterAdvance) {
+      g.awaitingBatterAdvance = false;
+      g.lastPlaySummary = '';
     }
   }
-  g.log.splice(index,1); save(); renderGame();
+  g.log.splice(index, 1);
+  save(); renderGame();
 }
 
 // ── PLAYER STATS ─────────────────────────────────────────────────────────────
