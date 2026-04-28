@@ -1130,6 +1130,16 @@ function addExtraInning(g) {
 
 function changeHalf(dir) {
   const g=state.game; if(!g) return;
+
+  // Commit the current half's runs/hits before navigating away
+  // (prevents scores bleeding into the wrong half when using the Prev/Next buttons)
+  const bT=g.halfInning, inn=g.currentInning-1;
+  if (g.score[bT][inn] === null) {
+    g.score[bT][inn] = g.currentRunsThisHalf;
+    g.hits[bT][inn]  = g.currentHitsThisHalf;
+  }
+  g.currentRunsThisHalf=0; g.currentHitsThisHalf=0;
+
   let abs=(g.currentInning-1)*2+g.halfInning+dir;
   if(abs<0) abs=0;
   const max=g.innings*2-1;
