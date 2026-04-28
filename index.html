@@ -724,9 +724,14 @@ function loadSavedTeam(t) {
 
 // ── GAME INIT ────────────────────────────────────────────────────────────────
 function startGame() {
+  // Always normalize first — Firebase can return arrays as objects which break spread/length
+  normalizeState();
+
   state.teams[0].name = document.getElementById('team1name').value || 'Away';
   state.teams[1].name = document.getElementById('team2name').value || 'Home';
-  if (!state.teams[0].players.length || !state.teams[1].players.length) {
+
+  const p0 = state.teams[0].players, p1 = state.teams[1].players;
+  if (!Array.isArray(p0) || !p0.length || !Array.isArray(p1) || !p1.length) {
     alert('Please add at least one player to each team first.'); return;
   }
 
@@ -734,7 +739,8 @@ function startGame() {
   if (!state.savedTeams) state.savedTeams = {};
   [0,1].forEach(t => {
     const nm = state.teams[t].name.trim();
-    if (nm) state.savedTeams[nm] = { players:[...state.teams[t].players] };
+    // Use toArray() instead of spread — safe even if Firebase returned an object
+    if (nm) state.savedTeams[nm] = { players: toArray(state.teams[t].players) };
   });
 
   const innings = parseInt(document.getElementById('totalInnings').value);
